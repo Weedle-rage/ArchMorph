@@ -15,6 +15,8 @@ export default function AccountButton({ onProjectsPulled }: { onProjectsPulled?:
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [message, setMessage] = useState("");
+  const [code, setCode] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
   const [status, setStatus] = useState<Status>("idle");
   const timer = useRef<number | undefined>(undefined);
   const userId = session?.user.id;
@@ -69,7 +71,26 @@ export default function AccountButton({ onProjectsPulled }: { onProjectsPulled?:
       email: email.trim(),
       options: { emailRedirectTo: `${window.location.origin}/studio` },
     });
-    setMessage(error ? error.message : "Check your email for a sign-in link.");
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+    setCodeSent(true);
+    setMessage("Check your email. Click the newest link, or type the 6-digit code below.");
+  }
+
+  async function verifyCode(event: React.FormEvent) {
+    event.preventDefault();
+    if (!supabase || !code.trim()) return;
+    setMessage("Checking…");
+    const { error } = await supabase.auth.verifyOtp({ email: email.trim(), token: code.trim(), type: "email" });
+    if (error) setMessage(error.message);
+    else {
+      setCode("");
+      setCodeSent(false);
+      setMessage("");
+      setOpen(false);
+    }
   }
 
   const label = session
@@ -101,9 +122,24 @@ export default function AccountButton({ onProjectsPulled }: { onProjectsPulled?:
                 Email
                 <input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} />
               </label>
-              <button type="submit">Email me a sign-in link</button>
+              <button type="submit">{codeSent ? "Send a new link or code" : "Email me a sign-in link"}</button>
               {message && <small>{message}</small>}
               <small>Your projects stay on this device until you sign in.</small>
+            </form>
+          )}
+          {!session && codeSent && (
+            <form onSubmit={verifyCode}>
+              <label>
+                6-digit code
+                <input
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={10}
+                  value={code}
+                  onChange={(event) => setCode(event.target.value)}
+                />
+              </label>
+              <button type="submit">Sign in with code</button>
             </form>
           )}
         </div>
