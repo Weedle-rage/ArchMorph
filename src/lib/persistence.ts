@@ -72,6 +72,39 @@ function writeLibrary(library: ProjectLibrary) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(library));
 }
 
+export const PROJECT_SAVED_EVENT = "archmorph:project-saved";
+export const PROJECT_DELETED_EVENT = "archmorph:project-deleted";
+
+function announce(name: string, projectId: string) {
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") window.dispatchEvent(new CustomEvent(name, { detail: { projectId } }));
+}
+
+/** Every locally stored project, used by cloud sync. */
+export function listLocalProjects(): Project[] {
+  return readLibrary().projects.map((record) => record.project);
+}
+
+/**
+ * Store projects that came from the cloud. A remote copy only replaces a local one
+ * when it is strictly newer. Returns how many local projects were added or updated.
+ */
+export function mergeRemoteProjects(remote: Project[]): number {
+  if (!remote.length) return 0;
+  const library = readLibrary();
+  let changed = 0;
+  for (const incoming of remote) {
+    const migrated = migrateProject(incoming);
+    const index = library.projects.findIndex((item) => item.project.id === migrated.id);
+    if (index >= 0 && library.projects[index].project.updatedAt >= migrated.updatedAt) continue;
+    const record = { project: migrated, savedAt: new Date().toISOString() };
+    if (index >= 0) library.projects[index] = record;
+    else library.projects.push(record);
+    changed += 1;
+  }
+  if (changed) writeLibrary(library);
+  return changed;
+}
+
 export function architecturalProjectSnapshot(project: Project): Project {
   const copy = cloneProject(project);
   copy.schemaVersion = PROJECT_SCHEMA_VERSION;
@@ -93,6 +126,7 @@ export function saveProjectLocally(project: Project) {
   else library.projects.push(record);
   library.activeProjectId = project.id;
   writeLibrary(library);
+  announce(PROJECT_SAVED_EVENT, project.id);
   return snapshot;
 }
 
@@ -169,6 +203,7 @@ export function deleteLocalProject(projectId: string) {
   if (library.projects.length === previousLength) throw new Error("Saved project not found on this device.");
   if (library.activeProjectId === projectId) library.activeProjectId = library.projects[0]?.project.id;
   writeLibrary(library);
+  announce(PROJECT_DELETED_EVENT, projectId);
   return library.activeProjectId ? loadSavedProject(library.activeProjectId) : undefined;
 }
 

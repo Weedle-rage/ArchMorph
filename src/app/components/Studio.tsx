@@ -105,6 +105,7 @@ import {
   type SavedProjectSummary,
 } from "@/lib/persistence";
 import { createArchMorphTools } from "@/lib/webmcp-tools";
+import AccountButton from "./AccountButton";
 import ChatPanel from "./ChatPanel";
 import FloorPlan, { type CanvasTool } from "./FloorPlan";
 import ModelView from "./ModelView";
@@ -1937,6 +1938,7 @@ export default function Studio() {
       )}
 
       <ChatPanel />
+      <AccountButton onProjectsPulled={() => setSavedProjects(listSavedProjects())} />
 
       {toast && <div className="toast" role="status" aria-live="polite"><Check size={15} /><span>{toast.message}</span>{toast.action === "undo" && <button type="button" onClick={() => { undo(); setToast(undefined); }}>Undo</button>}{toast.download && <><a href={toast.download.url} download={toast.download.filename} onClick={() => window.setTimeout(() => setToast(undefined), 250)}>Save file</a><a href={toast.download.url} target="_blank" rel="noopener noreferrer">Open preview</a></>}</div>}
     </main>
