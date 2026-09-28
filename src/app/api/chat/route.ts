@@ -1,3 +1,4 @@
+import { clientIdFromRequest, createLimiter, limitConfigFromEnv } from "@/lib/rate-limit";
 import { createArchMorphTools } from "@/lib/webmcp-tools";
 
 const MODEL = "claude-sonnet-5-5";
@@ -30,9 +31,25 @@ const toolDefinitions = createArchMorphTools({
   ...(index === all.length - 1 ? { cache_control: { type: "ephemeral" } } : {}),
 }));
 
+const limiter = createLimiter(limitConfigFromEnv(process.env));
+
+const limitMessages = {
+  minute: "You're sending messages too quickly. Please wait a moment.",
+  day: "You've reached today's AI assistant limit. It resets within 24 hours.",
+  global: "The AI assistant is at capacity for today. Please try again later.",
+} as const;
+
 export async function POST(request: Request) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return Response.json({ error: "The AI assistant is not configured." }, { status: 503 });
+
+  const limit = limiter.check(clientIdFromRequest(request));
+  if (!limit.ok) {
+    return Response.json(
+      { error: limitMessages[limit.scope] },
+      { status: 429, headers: { "retry-after": String(limit.retryAfterSeconds) } },
+    );
+  }
 
   const raw = await request.text();
   if (raw.length > MAX_BODY_BYTES) return Response.json({ error: "Request too large." }, { status: 413 });
