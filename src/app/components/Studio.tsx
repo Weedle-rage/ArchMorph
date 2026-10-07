@@ -1556,7 +1556,7 @@ export default function Studio() {
 
           <div id="library-panel-exterior" className="panel-scroll" role="tabpanel" aria-labelledby="library-tab-exterior" tabIndex={0} hidden={libraryTab !== "exterior"}>
             <Section title="Site">
-              <div className="site-line"><span>Rectangular plot</span><b>{project.plot.width}&apos; × {project.plot.length}&apos;</b></div>
+              <div className="site-line"><span>Rectangular plot</span><b>{unit === "m" ? `${formatLength(project.plot.width, unit)} × ${formatLength(project.plot.length, unit)}` : `${project.plot.width}' × ${project.plot.length}'`}</b></div>
               <div className="site-line"><span>Front faces</span><b>{project.plot.orientation}</b></div>
             </Section>
 
