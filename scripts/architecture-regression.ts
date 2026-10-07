@@ -43,6 +43,7 @@ import {
   furnitureKinds,
   rectOverlapArea,
 } from "../src/lib/furniture.ts";
+import { localizeMessage } from "../src/lib/units.ts";
 
 const memory = new Map<string, string>();
 Object.assign(globalThis, {
@@ -90,13 +91,22 @@ for (const end of [
   assert.ok(dot3(handedness, frame.zAxis) > 0.999, "a sloped support frame should remain right-handed");
 }
 
+const capturedMessages: string[] = [];
+
 function assertOperationRejectedWithoutMutation(
   source: Project,
   operation: ArchitectureOperation,
   expected: RegExp,
 ) {
   const snapshot = JSON.stringify(source);
-  assert.throws(() => applyOperation(source, operation, "agent"), expected);
+  assert.throws(() => {
+    try {
+      applyOperation(source, operation, "agent");
+    } catch (error) {
+      if (error instanceof Error) capturedMessages.push(error.message);
+      throw error;
+    }
+  }, expected);
   assert.equal(JSON.stringify(source), snapshot, `Rejected ${operation.type} must not mutate its source project.`);
 }
 let project = createInitialProject();
@@ -153,7 +163,7 @@ assert.equal(metrics.openSiteArea, metrics.plotArea - projectMetrics(project).gr
 persistence.saveProjectLocally(project);
 const restored = persistence.loadLatestProject()!;
 assert.equal(restored.id, project.id);
-assert.equal(restored.schemaVersion, 8);
+assert.equal(restored.schemaVersion, 9);
 assert.equal(restored.walls.length, project.walls.length);
 assert.equal(restored.openings.length, project.openings.length);
 assert.equal(restored.view.focusElementId, undefined, "temporary focus state should not be persisted");
@@ -407,7 +417,7 @@ assert.equal(exteriorProject.facadeFeatures.length, 1, "hosted façade features 
 assert.ok(exteriorProject.walls.some((wall) => wall.exterior && wall.finish === "brick"), "per-wall finish overrides should survive room-controlled topology movement");
 assertOperationRejectedWithoutMutation(exteriorProject, { type: "update_balcony", balconyId: exteriorProject.balconies[0].id, width: 80 }, /inside the plot/);
 const exteriorRoundTrip = persistence.importProjectDocument(persistence.exportProjectDocument(exteriorProject));
-assert.equal(exteriorRoundTrip.schemaVersion, 8);
+assert.equal(exteriorRoundTrip.schemaVersion, 9);
 assert.equal(exteriorRoundTrip.balconies.length, 1);
 assert.equal(exteriorRoundTrip.facadeFeatures.length, 1);
 assert.equal(exteriorRoundTrip.siteBoundary.enabled, true);
@@ -431,7 +441,7 @@ delete (legacyDocument.stairs as Array<Record<string, unknown>>)[0].landingDepth
 delete (legacyDocument.stairs as Array<Record<string, unknown>>)[0].wellWidth;
 delete (legacyDocument.stairs as Array<Record<string, unknown>>)[0].turnSide;
 const migratedLegacy = migrateProject(legacyDocument as unknown as Project);
-assert.equal(migratedLegacy.schemaVersion, 8, "legacy projects should migrate to schema v8");
+assert.equal(migratedLegacy.schemaVersion, 9, "legacy projects should migrate to schema v9");
 assert.equal(migratedLegacy.exteriorFinish, "stucco", "legacy projects should receive a stable default facade finish");
 assert.equal(migratedLegacy.rooms[0].shape, "rectangle", "legacy rooms should migrate as rectangles");
 assert.equal(migratedLegacy.stairs[0].rotation, 0, "legacy stairs should migrate to zero rotation");
@@ -804,7 +814,7 @@ assertOperationRejectedWithoutMutation(
 
 {
   const fresh = createInitialProject();
-  assert.equal(fresh.schemaVersion, 8);
+  assert.equal(fresh.schemaVersion, 9);
   assert.deepEqual(fresh.furniture, [], "a new project starts without furniture");
 
   // Review focus 5: a v7 project has no furniture array at all.
@@ -812,7 +822,7 @@ assertOperationRejectedWithoutMutation(
   v7.schemaVersion = 7;
   delete v7.furniture;
   const migrated = migrateProject(v7 as unknown as Project);
-  assert.equal(migrated.schemaVersion, 8);
+  assert.equal(migrated.schemaVersion, 9);
   assert.deepEqual(migrated.furniture, []);
 
   // Existing furniture survives a migration round trip, with a bad rotation repaired.
@@ -1057,6 +1067,51 @@ const furnitureFixture = () => {
 
   // Final review, Minor 1 (fixed with Important 2): an item whose floor differs from its room's cannot be edited into place.
   assertOperationRejectedWithoutMutation(ghost, { type: "update_furniture", furnitureId: ghost.furniture[0].id, x: 1 }, /not on the same floor|would extend outside/);
+}
+
+{
+  const base = createInitialProject();
+  assert.equal(base.unit, "ft");
+
+  // Review focus 2: switching changes only the unit, never the geometry.
+  const { base: furnishedBase, roomId } = furnitureFixture();
+  const furnished = applyOperation(furnishedBase, { type: "add_furniture", roomId, kind: "double-bed" }, "agent").project;
+  const geometry = (candidate: Project) => JSON.stringify({
+    plot: candidate.plot, floors: candidate.floors, rooms: candidate.rooms, walls: candidate.walls, openings: candidate.openings,
+    stairs: candidate.stairs, balconies: candidate.balconies, furniture: candidate.furniture, roof: candidate.roof,
+  });
+  const metric = applyOperation(furnished, { type: "set_units", unit: "m" }, "human");
+  assert.equal(metric.project.unit, "m");
+  assert.equal(furnished.unit, "ft", "set_units must not mutate its source project");
+  assert.equal(metric.project.version, furnished.version + 1, "one operation, one history entry");
+  assert.equal((metric.result as { unit: string }).unit, "m");
+  assert.equal(geometry(metric.project), geometry(furnished), "geometry is byte-identical after switching");
+  const backAgain = applyOperation(metric.project, { type: "set_units", unit: "ft" }, "human").project;
+  assert.equal(backAgain.unit, "ft");
+  assert.equal(geometry(backAgain), geometry(furnished));
+
+  assertOperationRejectedWithoutMutation(base, { type: "set_units", unit: "ft" }, /Units are already feet\./);
+  assertOperationRejectedWithoutMutation(metric.project, { type: "set_units", unit: "m" }, /Units are already metres\./);
+  assertOperationRejectedWithoutMutation(base, { type: "set_units", unit: "yd" as never }, /Unit must be ft or m\./);
+
+  // Review focus 2: old and hand-edited projects load in feet.
+  const asV8 = (patch: Record<string, unknown>) => migrateProject({ ...JSON.parse(JSON.stringify(base)), schemaVersion: 8, ...patch } as Project);
+  assert.equal(asV8({}).unit, "ft");
+  assert.equal(asV8({}).schemaVersion, 9);
+  assert.equal(asV8({ unit: "m" }).unit, "m", "a metric project survives migration");
+  assert.equal(asV8({ unit: "yd" }).unit, "ft", "an invalid unit is repaired to feet");
+  assert.equal(asV8({ unit: undefined }).unit, "ft", "a missing unit is repaired to feet");
+  assert.equal(asV8({ unit: "imperial" }).unit, "ft");
+
+  // Review focus 5: no feet leak into a metric project's messages.
+  assert.ok(capturedMessages.length > 20, `expected the run to capture many rejection messages, got ${capturedMessages.length}`);
+  const issueMessages = [project, furnished].flatMap((candidate) => validateLayout(candidate).issues.flatMap(
+    (issue) => [issue.message, issue.suggestion].filter((text): text is string => typeof text === "string"),
+  ));
+  for (const message of [...capturedMessages, ...issueMessages]) {
+    const localized = localizeMessage(message, "m");
+    assert.ok(!/\d\s*(?:sq\s)?ft\b|\d′/.test(localized), `a metric message still quotes feet: "${message}" -> "${localized}"`);
+  }
 }
 
 console.log(JSON.stringify({
