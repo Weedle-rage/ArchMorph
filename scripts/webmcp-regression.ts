@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { furnitureKinds } from "../src/lib/furniture.ts";
 import {
   applyOperation,
   createInitialProject,
@@ -139,11 +140,11 @@ const runtime: ToolRuntime = {
 const tools = createArchMorphTools(runtime);
 const names = tools.map((tool) => tool.name);
 
-assert.equal(tools.length, 57, "ArchMorph should expose exactly 57 canonical tools");
+assert.equal(tools.length, 61, "ArchMorph should expose exactly 61 canonical tools");
 assert.equal(new Set(names).size, tools.length, "WebMCP tool names must be unique");
 assert.deepEqual(
   Object.fromEntries(["inspect", "edit", "calculate", "present"].map((category) => [category, tools.filter((tool) => tool.category === category).length])),
-  { inspect: 8, edit: 37, calculate: 5, present: 7 },
+  { inspect: 9, edit: 40, calculate: 5, present: 7 },
   "the documented category counts must match the live catalog",
 );
 
@@ -163,6 +164,7 @@ const expectedReadOnly = new Set([
   "inspect_opening",
   "inspect_circulation",
   "inspect_exterior",
+  "list_furniture_kinds",
   "calculate_room_area",
   "calculate_total_area",
   "calculate_open_area",
@@ -364,5 +366,37 @@ assert.equal(
 
 const exported = await tools.find((tool) => tool.name === "export_plan")!.execute({ format: "json", download: false }) as { projectVersion: number };
 assert.equal(exported.projectVersion, project.version, "exports should identify the current project version");
+
+{
+  project = createInitialProject();
+  const furnitureTool = (name: string) => tools.find((tool) => tool.name === name)!;
+  await furnitureTool("create_room").execute({ floorId: project.view.activeFloorId, name: "Bedroom", roomType: "Bedroom", x: 5, y: 12, width: 12, length: 12 });
+  const bedroomId = project.rooms[0].id;
+
+  const kinds = await furnitureTool("list_furniture_kinds").execute({}) as { unit: string; kinds: Array<{ kind: string; width: number }> };
+  assert.equal(kinds.unit, "ft");
+  assert.deepEqual(kinds.kinds.map((item) => item.kind), [...furnitureKinds], "list_furniture_kinds returns the whole catalog");
+
+  const addSchema = furnitureTool("add_furniture").inputSchema as { properties: { kind: { enum: string[] }; rotation: { enum: number[] } }; required: string[] };
+  assert.deepEqual(addSchema.properties.kind.enum, [...furnitureKinds], "kind is an enum of the catalog keys");
+  assert.deepEqual(addSchema.properties.rotation.enum, [0, 90, 180, 270]);
+  assert.deepEqual(addSchema.required, ["roomId", "kind"]);
+
+  // Human/agent parity: the same operation gives the same furniture whoever sends it.
+  const human = applyOperation(project, { type: "add_furniture", roomId: bedroomId, kind: "sofa" }, "human").project.furniture[0];
+  await furnitureTool("add_furniture").execute({ roomId: bedroomId, kind: "sofa" });
+  assert.deepEqual({ ...project.furniture[0], id: "x" }, { ...human, id: "x" });
+
+  const sofaId = project.furniture[0].id;
+  await furnitureTool("update_furniture").execute({ furnitureId: sofaId, rotation: 90, x: 1, y: 1 });
+  assert.equal(project.furniture[0].rotation, 90);
+  await assert.rejects(
+    async () => furnitureTool("add_furniture").execute({ roomId: bedroomId, kind: "wardrobe", x: 1, y: 1 }),
+    /would overlap Sofa/,
+    "an invalid placement fails with the named item",
+  );
+  await furnitureTool("delete_furniture").execute({ furnitureId: sofaId });
+  assert.equal(project.furniture.length, 0);
+}
 
 console.log(`WebMCP regression passed: ${landingTools.length} landing tools, ${tools.length} studio tools, ${expectedReadOnly.size} read-only studio tools, inspect_floor summary ${summary.length} vs full ${full.length} chars, representative execution verified.`);
