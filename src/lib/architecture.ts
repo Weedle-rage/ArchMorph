@@ -1,4 +1,12 @@
-import type { FurnitureKind } from "./furniture.ts";
+import {
+  FURNITURE_OVERLAP_TOLERANCE,
+  findFreeFurniturePosition,
+  footprintFitsPolygon,
+  furnitureCatalog,
+  furnitureFootprint,
+  rectOverlapArea,
+  type FurnitureKind,
+} from "./furniture.ts";
 
 export type Actor = "human" | "agent" | "system";
 export type ViewMode = "2d" | "3d";
@@ -574,6 +582,31 @@ export type ArchitectureOperation =
       railingSides?: WallSide[];
     }
   | { type: "delete_balcony"; balconyId: string }
+  | {
+      type: "add_furniture";
+      roomId: string;
+      kind: FurnitureKind;
+      name?: string;
+      x?: number;
+      y?: number;
+      width?: number;
+      length?: number;
+      height?: number;
+      rotation?: FurnitureRotation;
+    }
+  | {
+      type: "update_furniture";
+      furnitureId: string;
+      name?: string;
+      x?: number;
+      y?: number;
+      width?: number;
+      length?: number;
+      height?: number;
+      rotation?: FurnitureRotation;
+      color?: string;
+    }
+  | { type: "delete_furniture"; furnitureId: string }
   | {
       type: "add_facade_feature";
       kind: FacadeFeatureKind;
@@ -2031,6 +2064,43 @@ function assertBalcony(project: Project, balcony: Balcony) {
   assertFinish(balcony.finish);
 }
 
+function assertFurnitureDimensions(project: Project, item: Furniture) {
+  if (![0, 90, 180, 270].includes(item.rotation)) throw new Error("Rotation must be 0, 90, 180 or 270 degrees.");
+  if (item.width < 0.5 || item.length < 0.5) throw new Error("Furniture must be at least 0.5 ft in each plan dimension.");
+  if (item.height < 0.25 || item.height > 8) throw new Error("Furniture height must be between 0.25 and 8 ft.");
+  const floor = project.floors.find((candidate) => candidate.id === item.floorId);
+  if (floor && item.height > floor.height + 0.001) {
+    throw new Error(`${item.name} is ${item.height} ft tall and would not fit the ${floor.height} ft storey.`);
+  }
+}
+
+function furnitureOrigin(room: Room) {
+  return { x: room.x, y: room.y };
+}
+
+function assertFurniturePlacement(project: Project, item: Furniture) {
+  const room = project.rooms.find((candidate) => candidate.id === item.roomId);
+  if (!room) throw new Error(`Room ${item.roomId} does not exist.`);
+  const rect = furnitureFootprint(item, furnitureOrigin(room));
+  if (!footprintFitsPolygon(roomVertices(room), rect)) throw new Error(`${item.name} would extend outside ${room.name}.`);
+  for (const other of project.furniture) {
+    if (other.id === item.id || other.floorId !== item.floorId) continue;
+    const otherRoom = project.rooms.find((candidate) => candidate.id === other.roomId);
+    if (!otherRoom) continue;
+    const area = rectOverlapArea(rect, furnitureFootprint(other, furnitureOrigin(otherRoom)));
+    if (area > FURNITURE_OVERLAP_TOLERANCE) throw new Error(`${item.name} would overlap ${other.name} by ${round(area)} sq ft.`);
+  }
+}
+
+/** Used when a room's shape changes: every item in that room must still sit inside it. */
+export function assertFurnitureFitsRoom(room: Room, items: Furniture[]) {
+  for (const item of items) {
+    if (!footprintFitsPolygon(roomVertices(room), furnitureFootprint(item, furnitureOrigin(room)))) {
+      throw new Error(`${item.name} would no longer fit. Move or remove it first.`);
+    }
+  }
+}
+
 function assertSiteBoundary(project: Project, boundary: SiteBoundarySettings) {
   if (boundary.height < 2 || boundary.height > 10) throw new Error("Boundary-wall height must be between 2 and 10 ft.");
   if (boundary.thickness < 0.2 || boundary.thickness > 2) throw new Error("Boundary-wall thickness must be between 0.2 and 2 ft.");
@@ -2097,6 +2167,7 @@ function displayName(project: Project, id: string) {
     project.stairs.find((item) => item.id === id)?.id ??
     project.balconies.find((item) => item.id === id)?.name ??
     project.facadeFeatures.find((item) => item.id === id)?.kind?.concat(" façade feature") ??
+    project.furniture.find((item) => item.id === id)?.name ??
     id
   );
 }
@@ -2108,6 +2179,7 @@ export function elementFloorIds(project: Project, id: string) {
     project.walls.find((item) => item.id === id),
     project.openings.find((item) => item.id === id),
     project.balconies.find((item) => item.id === id),
+    project.furniture.find((item) => item.id === id),
   ].find(Boolean);
   if (direct) return [direct.floorId];
   const stair = project.stairs.find((item) => item.id === id);
@@ -2645,6 +2717,88 @@ export function applyOperation(
       result = { deletedBalconyId: balcony.id };
       break;
     }
+    case "add_furniture": {
+      const room = project.rooms.find((item) => item.id === operation.roomId);
+      if (!room) throw new Error(`Room ${operation.roomId} does not exist.`);
+      const preset = furnitureCatalog[operation.kind];
+      if (!preset) throw new Error(`Unknown furniture kind ${String(operation.kind)}.`);
+      const sameKind = project.furniture.filter((item) => item.roomId === room.id && item.kind === operation.kind).length;
+      const draft: Furniture = {
+        id: createId("furniture"),
+        floorId: room.floorId,
+        roomId: room.id,
+        kind: operation.kind,
+        name: operation.name?.trim() || (sameKind ? `${preset.label} ${sameKind + 1}` : preset.label),
+        x: 0,
+        y: 0,
+        width: round(operation.width ?? preset.width),
+        length: round(operation.length ?? preset.length),
+        height: round(operation.height ?? preset.height),
+        rotation: operation.rotation ?? 0,
+      };
+      assertFurnitureDimensions(project, draft);
+      if (operation.x === undefined && operation.y === undefined) {
+        const others = project.furniture
+          .filter((item) => item.floorId === room.floorId)
+          .flatMap((item) => {
+            const host = project.rooms.find((candidate) => candidate.id === item.roomId);
+            return host ? [furnitureFootprint(item, furnitureOrigin(host))] : [];
+          });
+        const spot = findFreeFurniturePosition({
+          vertices: roomVertices(room),
+          origin: furnitureOrigin(room),
+          bounds: roomBounds(room),
+          item: draft,
+          others,
+        });
+        if (!spot) throw new Error(`${draft.name} does not fit anywhere in ${room.name}. Remove or resize something first.`);
+        draft.x = spot.x;
+        draft.y = spot.y;
+      } else {
+        draft.x = round(operation.x ?? 0);
+        draft.y = round(operation.y ?? 0);
+      }
+      assertFurniturePlacement(project, draft);
+      project.furniture.push(draft);
+      project.view.activeFloorId = draft.floorId;
+      project.view.focusElementId = draft.id;
+      description = `${who} added ${draft.name} to ${room.name}`;
+      result = { furniture: draft, footprint: furnitureFootprint(draft, furnitureOrigin(room)) };
+      break;
+    }
+    case "update_furniture": {
+      const index = project.furniture.findIndex((item) => item.id === operation.furnitureId);
+      if (index < 0) throw new Error(`Furniture ${operation.furnitureId} does not exist.`);
+      const previous = project.furniture[index];
+      const next: Furniture = {
+        ...previous,
+        name: operation.name?.trim() || previous.name,
+        x: round(operation.x ?? previous.x),
+        y: round(operation.y ?? previous.y),
+        width: round(operation.width ?? previous.width),
+        length: round(operation.length ?? previous.length),
+        height: round(operation.height ?? previous.height),
+        rotation: operation.rotation ?? previous.rotation,
+        color: operation.color ?? previous.color,
+      };
+      assertFurnitureDimensions(project, next);
+      assertFurniturePlacement(project, next);
+      project.furniture[index] = next;
+      project.view.focusElementId = next.id;
+      const host = project.rooms.find((item) => item.id === next.roomId)!;
+      description = `${who} updated ${next.name}`;
+      result = { furniture: next, footprint: furnitureFootprint(next, furnitureOrigin(host)) };
+      break;
+    }
+    case "delete_furniture": {
+      const item = project.furniture.find((candidate) => candidate.id === operation.furnitureId);
+      if (!item) throw new Error(`Furniture ${operation.furnitureId} does not exist.`);
+      project.furniture = project.furniture.filter((candidate) => candidate.id !== item.id);
+      if (project.view.focusElementId === item.id) project.view.focusElementId = undefined;
+      description = `${who} deleted ${item.name}`;
+      result = { deletedFurnitureId: item.id };
+      break;
+    }
     case "add_facade_feature": {
       const defaults = operation.kind === "frame"
         ? { elevation: 1, height: 8, projection: 0.6, thickness: 0.45 }
@@ -2806,7 +2960,7 @@ export function applyOperation(
     }
     case "focus_element": {
       if (operation.elementId) {
-        const exists = [project.rooms, project.walls, project.openings, project.stairs, project.balconies, project.facadeFeatures]
+        const exists = [project.rooms, project.walls, project.openings, project.stairs, project.balconies, project.facadeFeatures, project.furniture]
           .some((items) => items.some((item) => item.id === operation.elementId));
         if (!exists) throw new Error(`Element ${operation.elementId} does not exist.`);
       }

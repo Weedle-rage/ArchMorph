@@ -3,6 +3,7 @@ import {
   applyOperation,
   buildCirculationGraph,
   cloneProject,
+  elementFloorIds,
   createInitialProject,
   inspectFloor,
   inspectRoom,
@@ -825,6 +826,105 @@ assertOperationRejectedWithoutMutation(
   delete noField.furniture;
   const renamed = applyOperation(noField as unknown as Project, { type: "rename_project", name: "Legacy" }, "agent").project;
   assert.deepEqual(renamed.furniture, []);
+}
+
+const furnitureFixture = () => {
+  const base = applyOperation(
+    createInitialProject(),
+    { type: "create_room", floorId: "floor-ground", name: "Bedroom", roomType: "Bedroom", x: 5, y: 12, width: 12, length: 12 },
+    "agent",
+  ).project;
+  return { base, roomId: base.rooms[0].id };
+};
+
+{
+  const { base, roomId } = furnitureFixture();
+  const withBed = applyOperation(base, { type: "add_furniture", roomId, kind: "double-bed" }, "agent");
+  assert.equal(base.furniture.length, 0, "add_furniture must not mutate its source project");
+  const bed = withBed.project.furniture[0];
+  assert.deepEqual([bed.x, bed.y, bed.width, bed.length, bed.height, bed.rotation], [0, 0, 5, 6.67, 2, 0], "omitted x/y auto-places at the top-left with catalog size");
+  assert.equal(bed.floorId, base.rooms[0].floorId, "the floor comes from the room");
+  assert.equal(withBed.project.version, base.version + 1);
+  assert.equal(withBed.project.view.focusElementId, bed.id);
+
+  // Review focus 1: touching the bed and the walls is allowed.
+  const table = applyOperation(withBed.project, { type: "add_furniture", roomId, kind: "bedside-table", x: 5, y: 0 }, "agent").project;
+  const table2 = applyOperation(table, { type: "add_furniture", roomId, kind: "bedside-table", x: 5, y: 1.5 }, "agent").project;
+  assert.deepEqual(table2.furniture.map((item) => item.name), ["Double Bed", "Bedside Table", "Bedside Table 2"], "repeat kinds are numbered so error messages name one item");
+  applyOperation(base, { type: "add_furniture", roomId, kind: "wardrobe", x: 8, y: 10 }, "agent"); // flush in the far corner
+
+  // Rejections leave the source untouched.
+  assertOperationRejectedWithoutMutation(base, { type: "add_furniture", roomId, kind: "wardrobe", x: 10, y: 0 }, /would extend outside Bedroom/);
+  assertOperationRejectedWithoutMutation(withBed.project, { type: "add_furniture", roomId, kind: "wardrobe", x: 2, y: 2 }, /would overlap Double Bed by 6 sq ft/);
+  assertOperationRejectedWithoutMutation(base, { type: "add_furniture", roomId, kind: "chair", height: 9 }, /between 0\.25 and 8 ft/);
+  assertOperationRejectedWithoutMutation(base, { type: "add_furniture", roomId, kind: "chair", width: 0.2 }, /at least 0\.5 ft/);
+  assertOperationRejectedWithoutMutation(base, { type: "add_furniture", roomId, kind: "chair", rotation: 45 as never }, /Rotation must be/);
+  assertOperationRejectedWithoutMutation(base, { type: "add_furniture", roomId, kind: "piano" as never }, /Unknown furniture kind/);
+  assertOperationRejectedWithoutMutation(base, { type: "add_furniture", roomId: "room-ghost", kind: "chair" }, /does not exist/);
+
+  // Review focus 3: rotation swaps the footprint, and rotating in place near a wall is rejected.
+  assertOperationRejectedWithoutMutation(base, { type: "add_furniture", roomId, kind: "wardrobe", x: 11, y: 0, rotation: 90 }, /would extend outside/);
+  applyOperation(base, { type: "add_furniture", roomId, kind: "wardrobe", x: 10, y: 0, rotation: 90 }, "agent");
+  assertOperationRejectedWithoutMutation(table2, { type: "update_furniture", furnitureId: table2.furniture[0].id, rotation: 90 }, /would overlap Bedside Table/);
+  const turned = applyOperation(withBed.project, { type: "update_furniture", furnitureId: bed.id, rotation: 90 }, "human").project;
+  assert.deepEqual(furnitureFootprint(turned.furniture[0], turned.rooms[0]), { x: turned.rooms[0].x, y: turned.rooms[0].y, w: 6.67, l: 5 });
+
+  // update and delete
+  const moved = applyOperation(table2, { type: "update_furniture", furnitureId: table2.furniture[1].id, x: 6.5, y: 0, name: "Left Side Table" }, "human").project;
+  assert.equal(moved.furniture[1].x, 6.5);
+  assert.equal(moved.furniture[1].name, "Left Side Table");
+  assertOperationRejectedWithoutMutation(table2, { type: "update_furniture", furnitureId: table2.furniture[1].id, x: 0, y: 0 }, /would overlap Double Bed/);
+  assertOperationRejectedWithoutMutation(table2, { type: "update_furniture", furnitureId: "furniture-ghost", x: 1 }, /does not exist/);
+  const gone = applyOperation(table2, { type: "delete_furniture", furnitureId: table2.furniture[1].id }, "agent").project;
+  assert.equal(gone.furniture.length, 2);
+  assertOperationRejectedWithoutMutation(gone, { type: "delete_furniture", furnitureId: table2.furniture[1].id }, /does not exist/);
+
+  // Selection plumbing used by the Studio.
+  assert.deepEqual(elementFloorIds(table2, table2.furniture[0].id), ["floor-ground"]);
+  assert.equal(
+    applyOperation(table2, { type: "focus_element", elementId: table2.furniture[0].id }, "agent").project.view.focusElementId,
+    table2.furniture[0].id,
+  );
+
+  // Review focus 5: a project object with no furniture field still accepts furniture.
+  const legacy = JSON.parse(JSON.stringify(base)) as Record<string, unknown>;
+  delete legacy.furniture;
+  assert.equal(applyOperation(legacy as unknown as Project, { type: "add_furniture", roomId, kind: "chair" }, "agent").project.furniture.length, 1);
+
+  // Review focus 2: auto-place until the room is full, then fail by name.
+  let packed = base;
+  let placed = 0;
+  for (; placed < 30; placed += 1) {
+    try {
+      packed = applyOperation(packed, { type: "add_furniture", roomId, kind: "dining-table" }, "agent").project;
+    } catch {
+      break;
+    }
+  }
+  assert.equal(placed, 8, "a 12 × 12 room holds eight 5 × 3 tables in two columns of four rows");
+  assertOperationRejectedWithoutMutation(packed, { type: "add_furniture", roomId, kind: "dining-table" }, /does not fit anywhere in Bedroom\. Remove or resize something first\./);
+}
+
+// Review focus 4 in the reducer: an L-shaped room's notch and a U-shaped room's slot.
+{
+  const l = applyOperation(
+    createInitialProject(),
+    { type: "create_room", floorId: "floor-ground", name: "Den", roomType: "Living Room", x: 5, y: 12, width: 12, length: 12, shape: "l-shape" },
+    "agent",
+  ).project;
+  const lId = l.rooms[0].id;
+  assertOperationRejectedWithoutMutation(l, { type: "add_furniture", roomId: lId, kind: "wardrobe", x: 1, y: 8 }, /would extend outside Den/);
+  assert.equal(applyOperation(l, { type: "add_furniture", roomId: lId, kind: "wardrobe", x: 8, y: 8 }, "agent").project.furniture.length, 1);
+
+  const u = applyOperation(
+    createInitialProject(),
+    { type: "create_room", floorId: "floor-ground", name: "Hall", roomType: "Living Room", x: 5, y: 12, width: 20, length: 16, shape: "u-shape" },
+    "agent",
+  ).project;
+  const uId = u.rooms[0].id;
+  assertOperationRejectedWithoutMutation(u, { type: "add_furniture", roomId: uId, kind: "sofa", width: 12, length: 3, x: 1, y: 10 }, /would extend outside Hall/);
+  assert.equal(applyOperation(u, { type: "add_furniture", roomId: uId, kind: "sofa", x: 0, y: 10 }, "agent").project.furniture.length, 1, "flush against the slot edge is allowed");
+  assert.equal(applyOperation(u, { type: "add_furniture", roomId: uId, kind: "sofa", x: 0, y: 0 }, "agent").project.furniture.length, 1);
 }
 
 console.log(JSON.stringify({
