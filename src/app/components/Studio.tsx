@@ -55,6 +55,7 @@ import {
   useSyncExternalStore,
   type RefObject,
   type ReactNode,
+  useContext,
 } from "react";
 import {
   applyOperation,
@@ -95,6 +96,14 @@ import {
   type Wall,
 } from "@/lib/architecture";
 import { furnitureCatalog, furnitureKinds, type FurnitureKind } from "@/lib/furniture";
+import {
+  formatLengthValue,
+  lengthUnitLabel,
+  localizeMessage,
+  parseLength,
+  type UnitSystem,
+} from "@/lib/units";
+import { UnitContext } from "./UnitContext";
 import {
   createNewLocalProject,
   deleteLocalProject,
@@ -385,7 +394,7 @@ function IconButton({
 function NumberField({
   label,
   value,
-  unit = "ft",
+  unit,
   min,
   max,
   step = 0.5,
@@ -400,42 +409,53 @@ function NumberField({
   onCommit: (value: number) => void;
 }) {
   const errorId = useId();
+  const system = useContext(UnitContext);
   const [error, setError] = useState<string>();
+  // Without a unit prop the field is a length in feet; with one ("" or "IP") it is a plain number.
+  const isLength = unit === undefined;
+  const shown = (feet: number) => (isLength ? Number(formatLengthValue(feet, system)) : feet);
+  const tag = isLength ? lengthUnitLabel(system) : unit;
   const range = min !== undefined && max !== undefined
-    ? `Enter a value from ${min} to ${max}.`
+    ? `Enter a value from ${shown(min)} to ${shown(max)}.`
     : min !== undefined
-      ? `Enter ${min} or more.`
+      ? `Enter ${shown(min)} or more.`
       : max !== undefined
-        ? `Enter ${max} or less.`
+        ? `Enter ${shown(max)} or less.`
         : "Enter a valid number.";
   return (
     <label className="field">
       <span>{label}</span>
       <span className="number-control">
         <input
-          key={value}
-          type="number"
-          defaultValue={value}
-          min={min}
-          max={max}
-          step={step}
+          key={`${value}:${system}`}
+          type={isLength ? "text" : "number"}
+          inputMode="decimal"
+          defaultValue={shown(value)}
+          min={isLength ? undefined : min}
+          max={isLength ? undefined : max}
+          step={isLength ? undefined : step}
           aria-invalid={Boolean(error)}
           aria-describedby={error ? errorId : undefined}
           onInput={() => setError(undefined)}
           onBlur={(event) => {
-            const next = Number(event.currentTarget.value);
+            let next = Number(event.currentTarget.value);
+            if (isLength) {
+              // Typed feet-inches and metric suffixes are accepted in either mode; the result is stored feet.
+              const parsed = parseLength(event.currentTarget.value, system);
+              next = parsed.ok ? parsed.feet : Number.NaN;
+            }
             const valid = Number.isFinite(next) && (min === undefined || next >= min) && (max === undefined || next <= max);
             if (valid && next !== value) onCommit(next);
             if (!valid) {
               setError(range);
-              event.currentTarget.value = String(value);
+              event.currentTarget.value = String(shown(value));
             }
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter") event.currentTarget.blur();
           }}
         />
-        <b>{unit}</b>
+        <b>{tag}</b>
       </span>
       {error && <small className="field-error" id={errorId}>{error}</small>}
     </label>
@@ -1019,6 +1039,7 @@ export default function Studio() {
   const selectedFacadeFacing = selectedOpeningWall ? wallCardinalFacing(project, selectedOpeningWall) : undefined;
   const activeFloor = project.floors.find((item) => item.id === project.view.activeFloorId)!;
   const metrics = projectMetrics(project);
+  const unit: UnitSystem = project.unit;
   const nativeStatus = toolStatus === "native";
   const navigationMode = project.view.navigationMode ?? "orbit";
   const activeIssue = validation.issues.find((issue) => issue.id === activeIssueId
@@ -1330,6 +1351,7 @@ export default function Studio() {
   };
 
   return (
+    <UnitContext.Provider value={project.unit}>
     <main className={`studio-shell ${libraryOpen ? "is-library-open" : ""} ${inspectorOpen ? "is-inspector-open" : ""}`}>
       <div className="visually-hidden" aria-live="polite" aria-atomic="true">{selectedId ? `Selected ${elementLabel(project, selectedId)}${selectedRoom ? `. Position ${selectedRoom.x} by ${selectedRoom.y} feet. Size ${selectedRoom.width} by ${selectedRoom.length} feet.` : ""}` : `No element selected. ${validation.issueCount} layout ${validation.issueCount === 1 ? "issue" : "issues"}.`}</div>
       <header className="topbar">
@@ -1512,7 +1534,6 @@ export default function Studio() {
               </div>
               <NumberField
                 label="Storey height"
-                unit="ft"
                 value={activeFloor?.height ?? 9}
                 min={7}
                 max={16}
@@ -1698,8 +1719,8 @@ export default function Studio() {
                     <div><span className={`issue-severity ${activeIssue.severity}`}><CircleAlert size={14} /></span><small>ISSUE {activeIssueIndex + 1} OF {validation.issueCount}</small></div>
                     <h2>{activeIssue.code.replaceAll("_", " ")}</h2>
                     <b>{activeIssue.elementIds.map((id) => elementLabel(project, id)).join(" + ")}</b>
-                    <p>{activeIssue.message}</p>
-                    <small>{activeIssue.suggestion}</small>
+                    <p>{localizeMessage(activeIssue.message, unit)}</p>
+                    <small>{localizeMessage(activeIssue.suggestion, unit)}</small>
                     <div className="issue-navigation">
                       <button type="button" onClick={() => { setInspectorTab("checks"); setActiveIssueId(undefined); }}><ChevronLeft size={14} /> All checks</button>
                       <span><button type="button" aria-label="Previous issue" onClick={() => moveIssue(-1)}><ChevronLeft size={14} /></button><button type="button" aria-label="Next issue" onClick={() => moveIssue(1)}><ChevronRight size={14} /></button></span>
@@ -1871,6 +1892,10 @@ export default function Studio() {
                   </>
                 ) : (
                   <>
+                    <Section title="Units">
+                      <label className="field field-full"><span>Display units</span><select value={project.unit} onChange={(event) => safeCommit({ type: "set_units", unit: event.target.value as UnitSystem })}><option value="ft">Feet (decimal)</option><option value="m">Metres</option></select></label>
+                      <p className="technical-note">Changes how lengths and areas are shown and typed. Geometry is unchanged.</p>
+                    </Section>
                     <Section title="Plot dimensions">
                       <div className="field-grid">
                         <NumberField label="Width" value={project.plot.width} min={15} onCommit={(width) => safeCommit({ type: "set_plot", width })} />
@@ -1920,7 +1945,7 @@ export default function Studio() {
                   {filteredActivity.map((entry) => (
                     <div key={entry.id} className={`activity-item actor-${entry.actor}`}>
                       <span className="activity-avatar">{entry.actor === "agent" ? <Sparkles size={12} /> : entry.actor === "human" ? "Y" : "S"}</span>
-                      <div><p>{entry.description}</p><small>{formatActivityTime(entry.timestamp)}{debugMode ? ` · v${entry.version}` : ""}</small></div>
+                      <div><p>{localizeMessage(entry.description, unit)}</p><small>{formatActivityTime(entry.timestamp)}{debugMode ? ` · v${entry.version}` : ""}</small></div>
                     </div>
                   ))}
                   {!filteredActivity.length && <p className="empty-activity">No {activityFilter} activity yet.</p>}
@@ -1942,7 +1967,7 @@ export default function Studio() {
                     return (
                     <button key={issue.id} type="button" onClick={() => focusIssue(issue.id)}>
                       <span className={`issue-severity ${issue.severity}`}><CircleAlert size={14} /></span>
-                      <div><b>{issue.code.replaceAll("_", " ")}{matchingIssues.length > 1 ? ` · ${matchingIndex + 1}/${matchingIssues.length}` : ""}</b><strong>{issue.elementIds.map((id) => elementLabel(project, id)).join(" + ") || "Project site"}</strong><p>{issue.message}</p><small>{issue.suggestion}</small></div>
+                      <div><b>{issue.code.replaceAll("_", " ")}{matchingIssues.length > 1 ? ` · ${matchingIndex + 1}/${matchingIssues.length}` : ""}</b><strong>{issue.elementIds.map((id) => elementLabel(project, id)).join(" + ") || "Project site"}</strong><p>{localizeMessage(issue.message, unit)}</p><small>{localizeMessage(issue.suggestion, unit)}</small></div>
                     </button>
                   );})}
                 </div>
@@ -2002,7 +2027,8 @@ export default function Studio() {
       <ChatPanel />
       <AccountButton onProjectsPulled={() => setSavedProjects(listSavedProjects())} />
 
-      {toast && <div className="toast" role="status" aria-live="polite"><Check size={15} /><span>{toast.message}</span>{toast.action === "undo" && <button type="button" onClick={() => { undo(); setToast(undefined); }}>Undo</button>}{toast.download && <><a href={toast.download.url} download={toast.download.filename} onClick={() => window.setTimeout(() => setToast(undefined), 250)}>Save file</a><a href={toast.download.url} target="_blank" rel="noopener noreferrer">Open preview</a></>}</div>}
+      {toast && <div className="toast" role="status" aria-live="polite"><Check size={15} /><span>{localizeMessage(toast.message, unit)}</span>{toast.action === "undo" && <button type="button" onClick={() => { undo(); setToast(undefined); }}>Undo</button>}{toast.download && <><a href={toast.download.url} download={toast.download.filename} onClick={() => window.setTimeout(() => setToast(undefined), 250)}>Save file</a><a href={toast.download.url} target="_blank" rel="noopener noreferrer">Open preview</a></>}</div>}
     </main>
+    </UnitContext.Provider>
   );
 }
