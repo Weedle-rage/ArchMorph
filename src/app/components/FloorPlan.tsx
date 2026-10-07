@@ -25,6 +25,7 @@ import {
   wallLength,
 } from "@/lib/architecture";
 import { furnitureCatalog, furnitureFootprint } from "@/lib/furniture";
+import { formatArea, formatLength, formatLengthValue } from "@/lib/units";
 
 export type CanvasTool = "select" | "room" | "wall" | "door" | "window" | "stair" | "measure" | "balcony";
 
@@ -74,6 +75,16 @@ type FloorPlanProps = {
 const snap = (value: number, grid = 0.5) => round(Math.round(value / grid) * grid);
 /** How close a dragged edge must come before it latches onto existing geometry, in feet. */
 const SNAP_DISTANCE = 0.75;
+
+/** Plan label length: today's imperial text (12.5') in feet projects, metres with two decimals otherwise. */
+function planLength(feet: number, unit: "ft" | "m", decimals = 2) {
+  return unit === "m" ? formatLength(feet, unit) : `${round(feet, decimals)}'`;
+}
+
+/** Dimension-line label: 12'–0" in feet projects. */
+function planDimension(feet: number, unit: "ft" | "m") {
+  return unit === "m" ? formatLength(feet, unit) : `${feet}'–0"`;
+}
 
 function roomLabel(room: Room) {
   return room.name.length > 18 ? `${room.name.slice(0, 17)}…` : room.name;
@@ -523,11 +534,11 @@ export default function FloorPlan({
         <line x1="0" y1={project.plot.length + 2.5} x2={project.plot.width} y2={project.plot.length + 2.5} />
         <line x1="0" y1={project.plot.length + 1.7} x2="0" y2={project.plot.length + 3.2} />
         <line x1={project.plot.width} y1={project.plot.length + 1.7} x2={project.plot.width} y2={project.plot.length + 3.2} />
-        <text x={project.plot.width / 2} y={project.plot.length + 4.1} textAnchor="middle">{project.plot.width}&apos;–0&quot;</text>
+        <text x={project.plot.width / 2} y={project.plot.length + 4.1} textAnchor="middle">{planDimension(project.plot.width, project.unit)}</text>
         <line x1={project.plot.width + 2.5} y1="0" x2={project.plot.width + 2.5} y2={project.plot.length} />
         <line x1={project.plot.width + 1.7} y1="0" x2={project.plot.width + 3.2} y2="0" />
         <line x1={project.plot.width + 1.7} y1={project.plot.length} x2={project.plot.width + 3.2} y2={project.plot.length} />
-        <text x={project.plot.width + 4} y={project.plot.length / 2} textAnchor="middle" transform={`rotate(90 ${project.plot.width + 4} ${project.plot.length / 2})`}>{project.plot.length}&apos;–0&quot;</text>
+        <text x={project.plot.width + 4} y={project.plot.length / 2} textAnchor="middle" transform={`rotate(90 ${project.plot.width + 4} ${project.plot.length / 2})`}>{planDimension(project.plot.length, project.unit)}</text>
       </g>
 
       <g className="north-arrow" transform={`translate(${project.plot.width + 5.3} 5) rotate(${northRotation})`} pointerEvents="none">
@@ -549,7 +560,7 @@ export default function FloorPlan({
         const visibleName = roomLabel(room).length > maximumCharacters ? `${roomLabel(room).slice(0, Math.max(4, maximumCharacters - 1))}…` : roomLabel(room);
         return (
           <g key={room.id} className={`room-group ${selected ? "is-selected" : ""}`}>
-            <title>{room.name} · {area} sq ft · {room.width} × {room.length} ft</title>
+            <title>{room.name} · {formatArea(area, project.unit)} · {formatLengthValue(room.width, project.unit)} × {formatLength(room.length, project.unit, { word: true })}</title>
             <polygon
               points={vertices.map((point) => `${point.x},${point.y}`).join(" ")}
               fill={room.color} fillOpacity={room.type === "Courtyard" ? 0.34 : 0.72}
@@ -561,13 +572,13 @@ export default function FloorPlan({
             />
             {(showLabels || selected) && <g pointerEvents="none" className="room-label">
               <text x={centroid.x} y={centroid.y + (compactLabel ? 0.3 : -0.35)} textAnchor="middle" className={`room-name ${compactLabel ? "is-compact" : ""}`}>{visibleName}</text>
-              {!compactLabel && <text x={centroid.x} y={centroid.y + 1.05} textAnchor="middle" className="room-area">{area} sq ft</text>}
-              {!compactLabel && !mediumLabel && <text x={room.x + room.width / 2} y={room.y + room.length - 0.65} textAnchor="middle" className="room-size">{room.width}&apos; × {room.length}&apos;</text>}
+              {!compactLabel && <text x={centroid.x} y={centroid.y + 1.05} textAnchor="middle" className="room-area">{formatArea(area, project.unit)}</text>}
+              {!compactLabel && !mediumLabel && <text x={room.x + room.width / 2} y={room.y + room.length - 0.65} textAnchor="middle" className="room-size">{planLength(room.width, project.unit)} × {planLength(room.length, project.unit)}</text>}
             </g>}
             {selected && (
               <>
                 <line x1={room.x} y1={room.y - 0.65} x2={room.x + room.width} y2={room.y - 0.65} className="selection-dimension" pointerEvents="none" />
-                <text x={room.x + room.width / 2} y={room.y - 1} textAnchor="middle" className="selection-dimension-text" pointerEvents="none">{room.width}&apos;–0&quot;</text>
+                <text x={room.x + room.width / 2} y={room.y - 1} textAnchor="middle" className="selection-dimension-text" pointerEvents="none">{planDimension(room.width, project.unit)}</text>
               </>
             )}
           </g>
@@ -622,7 +633,7 @@ export default function FloorPlan({
           const y1 = center.y - ty * feature.width / 2 + normal.y * projection;
           const x2 = center.x + tx * feature.width / 2 + normal.x * projection;
           const y2 = center.y + ty * feature.width / 2 + normal.y * projection;
-          return <line key={feature.id} x1={x1} y1={y1} x2={x2} y2={y2} stroke={selectedId === feature.id ? "#d65b32" : "#866d55"} strokeWidth={selectedId === feature.id ? 0.4 : Math.max(0.18, feature.thickness)} strokeLinecap="square" onPointerDown={(event) => { if (tool !== "select") return; event.stopPropagation(); onSelect(feature.id); }}><title>{feature.kind} · {feature.width} ft</title></line>;
+          return <line key={feature.id} x1={x1} y1={y1} x2={x2} y2={y2} stroke={selectedId === feature.id ? "#d65b32" : "#866d55"} strokeWidth={selectedId === feature.id ? 0.4 : Math.max(0.18, feature.thickness)} strokeLinecap="square" onPointerDown={(event) => { if (tool !== "select") return; event.stopPropagation(); onSelect(feature.id); }}><title>{feature.kind} · {formatLength(feature.width, project.unit, { word: true })}</title></line>;
         })}
       </g>
 
@@ -635,7 +646,7 @@ export default function FloorPlan({
           const selected = selectedId === item.id;
           const label = furnitureCatalog[item.kind]?.shortLabel ?? item.name;
           return <g key={item.id} className={`furniture-item ${selected ? "is-selected" : ""}`} onPointerDown={(event) => handleFurniturePointerDown(event, item)}>
-            <title>{item.name} · {item.width} × {item.length} ft</title>
+            <title>{item.name} · {formatLengthValue(item.width, project.unit)} × {formatLength(item.length, project.unit, { word: true })}</title>
             <rect x={rect.x} y={rect.y} width={rect.w} height={rect.l} fill="#e7dfd0" fillOpacity="0.85" stroke={selected ? "#d65b32" : "#8a7a64"} strokeWidth={selected ? 0.28 : 0.1} />
             {Math.min(rect.w, rect.l) >= 1.6 && <text x={rect.x + rect.w / 2} y={rect.y + rect.l / 2 + 0.22} textAnchor="middle" fontSize="0.6" fontWeight="700" fill="#5d5240" pointerEvents="none">{label}</text>}
           </g>;
@@ -655,7 +666,7 @@ export default function FloorPlan({
                 ? { x1: balcony.x, y1: balcony.y, x2: balcony.x, y2: balcony.y + balcony.length }
                 : { x1: balcony.x + balcony.width, y1: balcony.y, x2: balcony.x + balcony.width, y2: balcony.y + balcony.length };
           return <g key={balcony.id} className={`balcony ${selected ? "is-selected" : ""}`} onPointerDown={(event) => handleBalconyPointerDown(event, balcony)}>
-            <title>{balcony.name} · {balcony.width} × {balcony.length} ft</title>
+            <title>{balcony.name} · {formatLengthValue(balcony.width, project.unit)} × {formatLength(balcony.length, project.unit, { word: true })}</title>
             <rect x={balcony.x} y={balcony.y} width={balcony.width} height={balcony.length} fill="#c8c1b3" fillOpacity="0.38" stroke={selected ? "#d65b32" : "#786f63"} strokeWidth={selected ? 0.3 : 0.12} />
             {balcony.railing.enabled && balcony.railing.sides.map((side) => <line key={side} {...sideLine(side)} stroke="#52635b" strokeWidth="0.2" strokeDasharray={balcony.railing.style === "solid" ? undefined : "0.45 0.25"} />)}
             <text x={balcony.x + balcony.width / 2} y={balcony.y + balcony.length / 2 + 0.25} textAnchor="middle" fontSize="0.68" fontWeight="700" pointerEvents="none">{balcony.kind.toUpperCase()}</text>
@@ -780,7 +791,7 @@ export default function FloorPlan({
           <line x1={previewWall.start.x} y1={previewWall.start.y} x2={previewWall.current.x} y2={previewWall.current.y} className="preview-wall" />
           {previewWall.armed && <circle cx={previewWall.start.x} cy={previewWall.start.y} r="0.3" className="span-anchor" />}
           <text x={(previewWall.start.x + previewWall.current.x) / 2} y={(previewWall.start.y + previewWall.current.y) / 2 - 0.8} textAnchor="middle" className="measurement-text">
-            {round(Math.hypot(previewWall.current.x - previewWall.start.x, previewWall.current.y - previewWall.start.y), 1)}&apos;
+            {planLength(Math.hypot(previewWall.current.x - previewWall.start.x, previewWall.current.y - previewWall.start.y), project.unit, 1)}
           </text>
         </g>
       )}
@@ -791,7 +802,7 @@ export default function FloorPlan({
           <circle cx={activeMeasurement.start.x} cy={activeMeasurement.start.y} r="0.22" />
           <circle cx={activeMeasurement.end.x} cy={activeMeasurement.end.y} r="0.22" />
           <text x={(activeMeasurement.start.x + activeMeasurement.end.x) / 2} y={(activeMeasurement.start.y + activeMeasurement.end.y) / 2 - 0.8} textAnchor="middle" className="measurement-text">
-            {round(Math.hypot(activeMeasurement.end.x - activeMeasurement.start.x, activeMeasurement.end.y - activeMeasurement.start.y), 2)} ft
+            {formatLength(Math.hypot(activeMeasurement.end.x - activeMeasurement.start.x, activeMeasurement.end.y - activeMeasurement.start.y), project.unit, { word: true })}
           </text>
         </g>
       )}
@@ -824,7 +835,7 @@ export default function FloorPlan({
 
       {selectedRoom && (
         <text x="0" y={project.plot.length + 6.5} className="selection-footer">
-          SELECTED · {selectedRoom.name.toUpperCase()} · {selectedRoom.width}&apos; × {selectedRoom.length}&apos; · {roomArea(selectedRoom)} SQ FT
+          SELECTED · {selectedRoom.name.toUpperCase()} · {planLength(selectedRoom.width, project.unit)} × {planLength(selectedRoom.length, project.unit)} · {formatArea(roomArea(selectedRoom), project.unit).toUpperCase()}
         </text>
       )}
     </svg>

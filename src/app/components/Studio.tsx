@@ -55,6 +55,7 @@ import {
   useSyncExternalStore,
   type RefObject,
   type ReactNode,
+  useContext,
 } from "react";
 import {
   applyOperation,
@@ -95,6 +96,18 @@ import {
   type Wall,
 } from "@/lib/architecture";
 import { furnitureCatalog, furnitureKinds, type FurnitureKind } from "@/lib/furniture";
+import {
+  areaUnitLabel,
+  formatArea,
+  formatAreaValue,
+  formatLength,
+  formatLengthValue,
+  lengthUnitLabel,
+  localizeMessage,
+  parseLength,
+  type UnitSystem,
+} from "@/lib/units";
+import { UnitContext } from "./UnitContext";
 import {
   createNewLocalProject,
   deleteLocalProject,
@@ -250,7 +263,7 @@ function elementLabel(project: Project, id?: string) {
   }
   const wall = project.walls.find((item) => item.id === id);
   if (wall) {
-    return `${wallKindLabel(project, wall)} ${round(wallLength(wall), 1)}′ · ${wallSpanLabel(wall)} · ${floorName(wall.floorId)}`;
+    return `${wallKindLabel(project, wall)} ${formatLength(wallLength(wall), project.unit, { decimals: 1 })} · ${wallSpanLabel(wall)} · ${floorName(wall.floorId)}`;
   }
   const opening = project.openings.find((item) => item.id === id);
   if (opening) {
@@ -259,7 +272,7 @@ function elementLabel(project: Project, id?: string) {
     const hostLabel = host ? `${wallKindLabel(project, host)} ${wallSpanLabel(host)}` : "Missing host wall";
     const rooms = host?.roomIds.map((roomId) => project.rooms.find((item) => item.id === roomId)?.name).filter(Boolean).join(" / ");
     const context = rooms && host?.exterior ? `${rooms} · ${hostLabel}` : hostLabel;
-    return `${opening.kind === "door" ? "Door" : "Window"} ${round(opening.width, 1)}′ @ ${round(opening.offset, 1)}′ · ${context} · ${floorName(opening.floorId)}`;
+    return `${opening.kind === "door" ? "Door" : "Window"} ${formatLength(opening.width, project.unit, { decimals: 1 })} @ ${formatLength(opening.offset, project.unit, { decimals: 1 })} · ${context} · ${floorName(opening.floorId)}`;
   }
   const stair = project.stairs.find((item) => item.id === id);
   if (stair) {
@@ -267,15 +280,15 @@ function elementLabel(project: Project, id?: string) {
     return connection ? `Staircase · ${connection.lowerFloor.name} to ${connection.upperFloor.name}` : `Staircase · ${floorName(stair.floorId)}`;
   }
   const balcony = project.balconies.find((item) => item.id === id);
-  if (balcony) return `${balcony.name} ${balcony.width}′ × ${balcony.length}′ · at ${round(balcony.x, 1)},${round(balcony.y, 1)} · ${floorName(balcony.floorId)}`;
+  if (balcony) return `${balcony.name} ${formatLength(balcony.width, project.unit)} × ${formatLength(balcony.length, project.unit)} · at ${formatLengthValue(balcony.x, project.unit, 1)},${formatLengthValue(balcony.y, project.unit, 1)} · ${floorName(balcony.floorId)}`;
   const feature = project.facadeFeatures.find((item) => item.id === id);
   if (feature) {
     const host = project.walls.find((item) => item.id === feature.wallId);
-    const where = host ? `${wallKindLabel(project, host)} ${wallSpanLabel(host)} @ ${round(feature.offset, 1)}′` : "exterior feature";
-    return `${feature.kind[0].toUpperCase()}${feature.kind.slice(1)} ${round(feature.width, 1)}′ · ${where}`;
+    const where = host ? `${wallKindLabel(project, host)} ${wallSpanLabel(host)} @ ${formatLength(feature.offset, project.unit, { decimals: 1 })}` : "exterior feature";
+    return `${feature.kind[0].toUpperCase()}${feature.kind.slice(1)} ${formatLength(feature.width, project.unit, { decimals: 1 })} · ${where}`;
   }
   const furniture = project.furniture.find((item) => item.id === id);
-  if (furniture) return `${furniture.name} ${furniture.width}′ × ${furniture.length}′ · ${floorName(furniture.floorId)}`;
+  if (furniture) return `${furniture.name} ${formatLength(furniture.width, project.unit)} × ${formatLength(furniture.length, project.unit)} · ${floorName(furniture.floorId)}`;
   return id;
 }
 
@@ -385,7 +398,7 @@ function IconButton({
 function NumberField({
   label,
   value,
-  unit = "ft",
+  unit,
   min,
   max,
   step = 0.5,
@@ -400,42 +413,53 @@ function NumberField({
   onCommit: (value: number) => void;
 }) {
   const errorId = useId();
+  const system = useContext(UnitContext);
   const [error, setError] = useState<string>();
+  // Without a unit prop the field is a length in feet; with one ("" or "IP") it is a plain number.
+  const isLength = unit === undefined;
+  const shown = (feet: number) => (isLength ? Number(formatLengthValue(feet, system)) : feet);
+  const tag = isLength ? lengthUnitLabel(system) : unit;
   const range = min !== undefined && max !== undefined
-    ? `Enter a value from ${min} to ${max}.`
+    ? `Enter a value from ${shown(min)} to ${shown(max)}.`
     : min !== undefined
-      ? `Enter ${min} or more.`
+      ? `Enter ${shown(min)} or more.`
       : max !== undefined
-        ? `Enter ${max} or less.`
+        ? `Enter ${shown(max)} or less.`
         : "Enter a valid number.";
   return (
     <label className="field">
       <span>{label}</span>
       <span className="number-control">
         <input
-          key={value}
-          type="number"
-          defaultValue={value}
-          min={min}
-          max={max}
-          step={step}
+          key={`${value}:${system}`}
+          type={isLength ? "text" : "number"}
+          inputMode="decimal"
+          defaultValue={shown(value)}
+          min={isLength ? undefined : min}
+          max={isLength ? undefined : max}
+          step={isLength ? undefined : step}
           aria-invalid={Boolean(error)}
           aria-describedby={error ? errorId : undefined}
           onInput={() => setError(undefined)}
           onBlur={(event) => {
-            const next = Number(event.currentTarget.value);
+            let next = Number(event.currentTarget.value);
+            if (isLength) {
+              // Typed feet-inches and metric suffixes are accepted in either mode; the result is stored feet.
+              const parsed = parseLength(event.currentTarget.value, system);
+              next = parsed.ok ? parsed.feet : Number.NaN;
+            }
             const valid = Number.isFinite(next) && (min === undefined || next >= min) && (max === undefined || next <= max);
             if (valid && next !== value) onCommit(next);
             if (!valid) {
               setError(range);
-              event.currentTarget.value = String(value);
+              event.currentTarget.value = String(shown(value));
             }
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter") event.currentTarget.blur();
           }}
         />
-        <b>{unit}</b>
+        <b>{tag}</b>
       </span>
       {error && <small className="field-error" id={errorId}>{error}</small>}
     </label>
@@ -1019,6 +1043,7 @@ export default function Studio() {
   const selectedFacadeFacing = selectedOpeningWall ? wallCardinalFacing(project, selectedOpeningWall) : undefined;
   const activeFloor = project.floors.find((item) => item.id === project.view.activeFloorId)!;
   const metrics = projectMetrics(project);
+  const unit: UnitSystem = project.unit;
   const nativeStatus = toolStatus === "native";
   const navigationMode = project.view.navigationMode ?? "orbit";
   const activeIssue = validation.issues.find((issue) => issue.id === activeIssueId
@@ -1330,8 +1355,9 @@ export default function Studio() {
   };
 
   return (
+    <UnitContext.Provider value={project.unit}>
     <main className={`studio-shell ${libraryOpen ? "is-library-open" : ""} ${inspectorOpen ? "is-inspector-open" : ""}`}>
-      <div className="visually-hidden" aria-live="polite" aria-atomic="true">{selectedId ? `Selected ${elementLabel(project, selectedId)}${selectedRoom ? `. Position ${selectedRoom.x} by ${selectedRoom.y} feet. Size ${selectedRoom.width} by ${selectedRoom.length} feet.` : ""}` : `No element selected. ${validation.issueCount} layout ${validation.issueCount === 1 ? "issue" : "issues"}.`}</div>
+      <div className="visually-hidden" aria-live="polite" aria-atomic="true">{selectedId ? `Selected ${elementLabel(project, selectedId)}${selectedRoom ? `. Position ${formatLengthValue(selectedRoom.x, unit)} by ${formatLengthValue(selectedRoom.y, unit)} ${unit === "m" ? "metres" : "feet"}. Size ${formatLengthValue(selectedRoom.width, unit)} by ${formatLengthValue(selectedRoom.length, unit)} ${unit === "m" ? "metres" : "feet"}.` : ""}` : `No element selected. ${validation.issueCount} layout ${validation.issueCount === 1 ? "issue" : "issues"}.`}</div>
       <header className="topbar">
         <Link className="brand" href="/" aria-label="ArchMorph home">
           <div className="brand-mark" aria-hidden="true"><span>AM</span></div>
@@ -1481,7 +1507,7 @@ export default function Studio() {
                     onClick={() => { setRoomType(type); activatePlanTool("room"); }}
                   >
                     <span style={{ background: roomSwatches[type] }} />
-                    <div><b>{type}</b><small>{defaultRoomSize[type][0]}′ × {defaultRoomSize[type][1]}′ default</small></div>
+                    <div><b>{type}</b><small>{formatLength(defaultRoomSize[type][0], unit)} × {formatLength(defaultRoomSize[type][1], unit)} default</small></div>
                     <Plus size={14} />
                   </button>
                 ))}
@@ -1505,14 +1531,13 @@ export default function Studio() {
                       aria-current={floor.id === project.view.activeFloorId ? "true" : undefined}
                       onClick={() => safeCommit({ type: "set_active_floor", floorId: floor.id })}
                     >
-                      <Layers3 size={15} /><span><b>{floor.name}</b><small>{roomCount} {roomCount === 1 ? "room" : "rooms"} · {floor.height} ft{stairCount ? ` · ${stairCount} stair connection${stairCount === 1 ? "" : "s"}` : ""}</small></span>
+                      <Layers3 size={15} /><span><b>{floor.name}</b><small>{roomCount} {roomCount === 1 ? "room" : "rooms"} · {formatLength(floor.height, unit, { word: true })}{stairCount ? ` · ${stairCount} stair connection${stairCount === 1 ? "" : "s"}` : ""}</small></span>
                     </button>
                   );
                 })}
               </div>
               <NumberField
                 label="Storey height"
-                unit="ft"
                 value={activeFloor?.height ?? 9}
                 min={7}
                 max={16}
@@ -1531,7 +1556,7 @@ export default function Studio() {
 
           <div id="library-panel-exterior" className="panel-scroll" role="tabpanel" aria-labelledby="library-tab-exterior" tabIndex={0} hidden={libraryTab !== "exterior"}>
             <Section title="Site">
-              <div className="site-line"><span>Rectangular plot</span><b>{project.plot.width}&apos; × {project.plot.length}&apos;</b></div>
+              <div className="site-line"><span>Rectangular plot</span><b>{unit === "m" ? `${formatLength(project.plot.width, unit)} × ${formatLength(project.plot.length, unit)}` : `${project.plot.width}' × ${project.plot.length}'`}</b></div>
               <div className="site-line"><span>Front faces</span><b>{project.plot.orientation}</b></div>
             </Section>
 
@@ -1564,7 +1589,7 @@ export default function Studio() {
                 {furnitureKinds.map((kind) => (
                   <button type="button" key={kind} onClick={() => addFurniture(kind)}>
                     <span style={{ background: furnitureCatalog[kind].color }} />
-                    <div><b>{furnitureCatalog[kind].label}</b><small>{furnitureCatalog[kind].width}′ × {furnitureCatalog[kind].length}′</small></div>
+                    <div><b>{furnitureCatalog[kind].label}</b><small>{formatLength(furnitureCatalog[kind].width, unit)} × {formatLength(furnitureCatalog[kind].length, unit)}</small></div>
                     <Plus size={14} />
                   </button>
                 ))}
@@ -1588,7 +1613,7 @@ export default function Studio() {
             </Section>
           </div>
           <div className="library-foot">
-            <span>Grid 1 ft</span><span>Snap 6 in</span><span>Units ft</span>
+            <span>Grid {formatLength(1, unit, { word: true })}</span><span>Snap {unit === "m" ? "0.15 m" : "6 in"}</span><span>Units {lengthUnitLabel(unit)}</span>
           </div>
         </aside>
 
@@ -1596,9 +1621,9 @@ export default function Studio() {
           <div className="canvas-toolbar">
             <IconButton label="Open design library" onClick={() => setLibraryOpen(true)}><PanelLeftOpen size={17} /></IconButton>
             <div className="metric-strip">
-              <span><small>NET FLOOR</small><b>{metrics.totalNetFloorArea.toLocaleString()} <i>sq ft</i></b></span>
-              <span><small>GROSS</small><b>{metrics.grossCoveredArea.toLocaleString()} <i>sq ft</i></b></span>
-              <span><small>OPEN SITE</small><b>{metrics.openSiteArea.toLocaleString()} <i>sq ft</i></b></span>
+              <span><small>NET FLOOR</small><b>{formatAreaValue(metrics.totalNetFloorArea, unit)} <i>{areaUnitLabel(unit)}</i></b></span>
+              <span><small>GROSS</small><b>{formatAreaValue(metrics.grossCoveredArea, unit)} <i>{areaUnitLabel(unit)}</i></b></span>
+              <span><small>OPEN SITE</small><b>{formatAreaValue(metrics.openSiteArea, unit)} <i>{areaUnitLabel(unit)}</i></b></span>
             </div>
             <div className="canvas-controls">
               {project.view.mode === "3d" && navigationMode === "orbit" && (
@@ -1698,8 +1723,8 @@ export default function Studio() {
                     <div><span className={`issue-severity ${activeIssue.severity}`}><CircleAlert size={14} /></span><small>ISSUE {activeIssueIndex + 1} OF {validation.issueCount}</small></div>
                     <h2>{activeIssue.code.replaceAll("_", " ")}</h2>
                     <b>{activeIssue.elementIds.map((id) => elementLabel(project, id)).join(" + ")}</b>
-                    <p>{activeIssue.message}</p>
-                    <small>{activeIssue.suggestion}</small>
+                    <p>{localizeMessage(activeIssue.message, unit)}</p>
+                    <small>{localizeMessage(activeIssue.suggestion, unit)}</small>
                     <div className="issue-navigation">
                       <button type="button" onClick={() => { setInspectorTab("checks"); setActiveIssueId(undefined); }}><ChevronLeft size={14} /> All checks</button>
                       <span><button type="button" aria-label="Previous issue" onClick={() => moveIssue(-1)}><ChevronLeft size={14} /></button><button type="button" aria-label="Next issue" onClick={() => moveIssue(1)}><ChevronRight size={14} /></button></span>
@@ -1730,7 +1755,7 @@ export default function Studio() {
                         <NumberField label="X position" value={selectedRoom.x} min={0} onCommit={(x) => safeCommit({ type: "move_room", roomId: selectedRoom.id, x, y: selectedRoom.y })} />
                         <NumberField label="Y position" value={selectedRoom.y} min={0} onCommit={(y) => safeCommit({ type: "move_room", roomId: selectedRoom.id, x: selectedRoom.x, y })} />
                       </div>
-                      <div className="area-result"><span>Net room area</span><b>{roomArea(selectedRoom).toLocaleString()} sq ft</b></div>
+                      <div className="area-result"><span>Net room area</span><b>{formatArea(roomArea(selectedRoom), unit)}</b></div>
                     </Section>
                     <Section title="Element">
                       <div className="detail-list"><span>Footprint <b>{(selectedRoom.shape ?? "rectangle").replace("-", " ")}</b></span><span>Floor <b>{project.floors.find((floor) => floor.id === selectedRoom.floorId)?.name}</b></span><span>Boundary segments <b>{selectedRoom.wallIds.length}</b></span></div>
@@ -1739,7 +1764,7 @@ export default function Studio() {
                   </>
                 ) : selectedWall ? (
                   <>
-                    <Section title="Geometry"><div className="detail-list"><span>Length <b>{wallLength(selectedWall).toFixed(2)} ft</b></span><span>Thickness <b>{selectedWall.thickness} ft</b></span><span>Height <b>{selectedWall.height} ft</b></span><span>Topology <b>{selectedWall.exterior ? "Exterior" : selectedWall.roomIds.length > 1 ? "Shared interior" : "Independent"}</b></span><span>Adjacent spaces <b>{selectedWall.roomIds.map((roomId) => project.rooms.find((room) => room.id === roomId)?.name ?? roomId).join(" / ") || "None"}</b></span></div></Section>
+                    <Section title="Geometry"><div className="detail-list"><span>Length <b>{formatLength(wallLength(selectedWall), unit, { word: true })}</b></span><span>Thickness <b>{formatLength(selectedWall.thickness, unit, { word: true })}</b></span><span>Height <b>{formatLength(selectedWall.height, unit, { word: true })}</b></span><span>Topology <b>{selectedWall.exterior ? "Exterior" : selectedWall.roomIds.length > 1 ? "Shared interior" : "Independent"}</b></span><span>Adjacent spaces <b>{selectedWall.roomIds.map((roomId) => project.rooms.find((room) => room.id === roomId)?.name ?? roomId).join(" / ") || "None"}</b></span></div></Section>
                     {selectedWall.exterior && <Section title="Façade finish"><label className="field field-full"><span>Wall material</span><select value={selectedWall.finish ?? ""} onChange={(event) => safeCommit({ type: "set_wall_finish", wallId: selectedWall.id, finish: (event.target.value || undefined) as ExteriorFinishId | undefined })}><option value="">Project default · {exteriorFinishPresets[project.exteriorFinish].label}</option>{Object.entries(exteriorFinishPresets).map(([id, finish]) => <option key={id} value={id}>{finish.label}</option>)}</select></label><p className="technical-note">A wall override stays attached to this canonical exterior wall; reset it to follow the project palette.</p></Section>}
                     <Section title="Openings"><div className="detail-list"><span>Doors <b>{project.openings.filter((item) => item.wallId === selectedWall.id && item.kind === "door").length}</b></span><span>Windows <b>{project.openings.filter((item) => item.wallId === selectedWall.id && item.kind === "window").length}</b></span></div></Section>
                   </>
@@ -1754,7 +1779,7 @@ export default function Studio() {
                       </div>
                     </Section>
                     <Section title="Host wall">
-                      <label className="field field-full"><span>Architectural wall</span><select value={selectedOpening.wallId} onChange={(event) => { const wall = project.walls.find((item) => item.id === event.target.value); if (wall) safeCommit({ type: "rehost_opening", openingId: selectedOpening.id, wallId: wall.id, offset: Math.max(selectedOpening.width / 2, Math.min(selectedOpening.offset, wallLength(wall) - selectedOpening.width / 2)) }); }}>{project.walls.filter((wall) => wall.floorId === selectedOpening.floorId && wall.roomIds.length > 0 && wallLength(wall) >= selectedOpening.width).map((wall) => <option key={wall.id} value={wall.id}>{wall.exterior ? `${wallCardinalFacing(project, wall) ?? "Exterior"} façade` : wall.roomIds.map((roomId) => project.rooms.find((room) => room.id === roomId)?.name).filter(Boolean).join(" / ")} · {wallLength(wall).toFixed(1)} ft</option>)}</select></label>
+                      <label className="field field-full"><span>Architectural wall</span><select value={selectedOpening.wallId} onChange={(event) => { const wall = project.walls.find((item) => item.id === event.target.value); if (wall) safeCommit({ type: "rehost_opening", openingId: selectedOpening.id, wallId: wall.id, offset: Math.max(selectedOpening.width / 2, Math.min(selectedOpening.offset, wallLength(wall) - selectedOpening.width / 2)) }); }}>{project.walls.filter((wall) => wall.floorId === selectedOpening.floorId && wall.roomIds.length > 0 && wallLength(wall) >= selectedOpening.width).map((wall) => <option key={wall.id} value={wall.id}>{wall.exterior ? `${wallCardinalFacing(project, wall) ?? "Exterior"} façade` : wall.roomIds.map((roomId) => project.rooms.find((room) => room.id === roomId)?.name).filter(Boolean).join(" / ")} · {formatLength(wallLength(wall), unit, { word: true, decimals: 1 })}</option>)}</select></label>
                     </Section>
                     {selectedOpening.kind === "door" ? (
                       <Section title="Door configuration">
@@ -1804,14 +1829,14 @@ export default function Studio() {
                     </Section>
                     <Section title="Vertical connection">
                       {selectedStairConnection ? (
-                        <div className="detail-list"><span>Connects <b>{selectedStairConnection.sourceFloor.name} → {selectedStairConnection.targetFloor.name}</b></span><span>Configuration <b>{selectedStairConnection.flightCount} flight{selectedStairConnection.flightCount === 1 ? "" : "s"}{selectedStair.stairType === "l-shaped" ? " + quarter landing" : selectedStair.stairType === "u-shaped" ? " + half landing" : ""}</b></span><span>Floor-to-floor rise <b>{selectedStairConnection.rise} ft</b></span><span>Concept risers <b>{selectedStairConnection.riserCount} × {(selectedStairConnection.riserHeight * 12).toFixed(2)} in</b></span><span>Concept tread depth{selectedStairConnection.flightCount === 2 ? "s" : ""} <b>{selectedStairConnection.treadDepths.map((depth) => `${(depth * 12).toFixed(2)} in`).join(" / ")}</b></span>{selectedStairConnection.landingElevation !== undefined && <span>Landing elevation <b>{selectedStairConnection.landingElevation} ft</b></span>}<span>Recommended run{selectedStairConnection.flightCount === 2 ? "s" : ""} <b>{selectedStairConnection.recommendedRuns.map((run) => `${run} ft`).join(" / ")}</b></span></div>
+                        <div className="detail-list"><span>Connects <b>{selectedStairConnection.sourceFloor.name} → {selectedStairConnection.targetFloor.name}</b></span><span>Configuration <b>{selectedStairConnection.flightCount} flight{selectedStairConnection.flightCount === 1 ? "" : "s"}{selectedStair.stairType === "l-shaped" ? " + quarter landing" : selectedStair.stairType === "u-shaped" ? " + half landing" : ""}</b></span><span>Floor-to-floor rise <b>{formatLength(selectedStairConnection.rise, unit, { word: true })}</b></span><span>Concept risers <b>{selectedStairConnection.riserCount} × {(selectedStairConnection.riserHeight * 12).toFixed(2)} in</b></span><span>Concept tread depth{selectedStairConnection.flightCount === 2 ? "s" : ""} <b>{selectedStairConnection.treadDepths.map((depth) => `${(depth * 12).toFixed(2)} in`).join(" / ")}</b></span>{selectedStairConnection.landingElevation !== undefined && <span>Landing elevation <b>{formatLength(selectedStairConnection.landingElevation, unit, { word: true })}</b></span>}<span>Recommended run{selectedStairConnection.flightCount === 2 ? "s" : ""} <b>{selectedStairConnection.recommendedRuns.map((run) => formatLength(run, unit, { word: true })).join(" / ")}</b></span></div>
                       ) : <p className="technical-note is-warning">This stair has no adjacent destination floor in its current direction.</p>}
                       <p className="technical-note">Concept check uses a 7¾ in maximum riser and 10 in minimum tread. Turning stairs split the rise across two flights and require a landing at least as large as the clear flight width. Validation also checks a full-width approach on both floors and walls crossing the stairwell. Headroom, handrails, guards, structure, and local code still require project-specific review.</p>
                     </Section>
                     {selectedStairConnection && <Section title="Entry and exit clearance">
                       <div className="detail-list">
                         {selectedStairAccess.map(({ level, floor, room }) => <span key={level}>{level === "lower" ? "Lower entry" : "Upper exit"} · {floor.name} <b>{room ? `Clear in ${room.name}` : "Needs a clear stair hall"}</b></span>)}
-                        <span>Required approach <b>{selectedStair.width} × {selectedStair.width} ft</b></span>
+                        <span>Required approach <b>{formatLengthValue(selectedStair.width, unit)} × {formatLength(selectedStair.width, unit, { word: true })}</b></span>
                       </div>
                       <p className="technical-note">The dashed plan rectangle is usable floor area outside the stair—not part of the flight. Keep it inside one room and free of crossing walls.</p>
                     </Section>}
@@ -1865,18 +1890,22 @@ export default function Studio() {
                       </div>
                     </Section>
                     <Section title="Host + finish">
-                      <label className="field field-full"><span>Exterior wall</span><select value={selectedFacadeFeature.wallId} onChange={(event) => { const wall = project.walls.find((item) => item.id === event.target.value)!; safeCommit({ type: "update_facade_feature", featureId: selectedFacadeFeature.id, wallId: wall.id, offset: Math.max(selectedFacadeFeature.width / 2, Math.min(selectedFacadeFeature.offset, wallLength(wall) - selectedFacadeFeature.width / 2)) }); }}>{project.walls.filter((wall) => wall.exterior && wallLength(wall) >= selectedFacadeFeature.width).map((wall) => <option key={wall.id} value={wall.id}>{project.floors.find((floor) => floor.id === wall.floorId)?.name} · {wallCardinalFacing(project, wall)} · {wallLength(wall).toFixed(1)} ft</option>)}</select></label>
+                      <label className="field field-full"><span>Exterior wall</span><select value={selectedFacadeFeature.wallId} onChange={(event) => { const wall = project.walls.find((item) => item.id === event.target.value)!; safeCommit({ type: "update_facade_feature", featureId: selectedFacadeFeature.id, wallId: wall.id, offset: Math.max(selectedFacadeFeature.width / 2, Math.min(selectedFacadeFeature.offset, wallLength(wall) - selectedFacadeFeature.width / 2)) }); }}>{project.walls.filter((wall) => wall.exterior && wallLength(wall) >= selectedFacadeFeature.width).map((wall) => <option key={wall.id} value={wall.id}>{project.floors.find((floor) => floor.id === wall.floorId)?.name} · {wallCardinalFacing(project, wall)} · {formatLength(wallLength(wall), unit, { word: true, decimals: 1 })}</option>)}</select></label>
                       <label className="field field-full"><span>Material</span><select value={selectedFacadeFeature.finish} onChange={(event) => safeCommit({ type: "update_facade_feature", featureId: selectedFacadeFeature.id, finish: event.target.value as ExteriorFinishId })}>{Object.entries(exteriorFinishPresets).map(([id, finish]) => <option key={id} value={id}>{finish.label}</option>)}</select></label>
                     </Section>
                   </>
                 ) : (
                   <>
+                    <Section title="Units">
+                      <label className="field field-full"><span>Display units</span><select value={project.unit} onChange={(event) => safeCommit({ type: "set_units", unit: event.target.value as UnitSystem })}><option value="ft">Feet (decimal)</option><option value="m">Metres</option></select></label>
+                      <p className="technical-note">Changes how lengths and areas are shown and typed. Geometry is unchanged.</p>
+                    </Section>
                     <Section title="Plot dimensions">
                       <div className="field-grid">
                         <NumberField label="Width" value={project.plot.width} min={15} onCommit={(width) => safeCommit({ type: "set_plot", width })} />
                         <NumberField label="Length" value={project.plot.length} min={15} onCommit={(length) => safeCommit({ type: "set_plot", length })} />
                       </div>
-                      <div className="area-result"><span>Plot area</span><b>{metrics.plotArea.toLocaleString()} sq ft</b></div>
+                      <div className="area-result"><span>Plot area</span><b>{formatArea(metrics.plotArea, unit)}</b></div>
                     </Section>
                     <Section title="Site orientation">
                       <label className="field field-full"><span>Front / access edge faces</span><select value={project.plot.orientation} onChange={(event) => safeCommit({ type: "set_plot_orientation", orientation: event.target.value as Project["plot"]["orientation"] })}>{(["North", "East", "South", "West"] as const).map((orientation) => <option key={orientation}>{orientation}</option>)}</select></label>
@@ -1900,7 +1929,7 @@ export default function Studio() {
                         {(["front", "rear", "left", "right"] as const).map((side) => <NumberField key={side} label={side[0].toUpperCase() + side.slice(1)} value={project.plot.setbacks[side]} min={0} onCommit={(value) => safeCommit({ type: "set_plot", setbacks: { [side]: value } })} />)}
                       </div>
                     </Section>
-                    <Section title="Live area schedule"><div className="detail-list"><span>Total net floor area <b>{metrics.totalNetFloorArea.toLocaleString()} sq ft</b></span><span>Gross covered area <b>{metrics.grossCoveredArea.toLocaleString()} sq ft</b></span><span>Balcony area <b>{metrics.balconyArea.toLocaleString()} sq ft</b></span><span>Terrace area <b>{metrics.terraceArea.toLocaleString()} sq ft</b></span><span>Open site area <b>{metrics.openSiteArea.toLocaleString()} sq ft</b></span><span>Plot area <b>{metrics.plotArea.toLocaleString()} sq ft</b></span><span>Buildable envelope <b>{metrics.buildableEnvelope.area.toLocaleString()} sq ft</b></span></div></Section>
+                    <Section title="Live area schedule"><div className="detail-list"><span>Total net floor area <b>{formatArea(metrics.totalNetFloorArea, unit)}</b></span><span>Gross covered area <b>{formatArea(metrics.grossCoveredArea, unit)}</b></span><span>Balcony area <b>{formatArea(metrics.balconyArea, unit)}</b></span><span>Terrace area <b>{formatArea(metrics.terraceArea, unit)}</b></span><span>Open site area <b>{formatArea(metrics.openSiteArea, unit)}</b></span><span>Plot area <b>{formatArea(metrics.plotArea, unit)}</b></span><span>Buildable envelope <b>{formatArea(metrics.buildableEnvelope.area, unit)}</b></span></div></Section>
                   </>
                 )}
               </>
@@ -1920,7 +1949,7 @@ export default function Studio() {
                   {filteredActivity.map((entry) => (
                     <div key={entry.id} className={`activity-item actor-${entry.actor}`}>
                       <span className="activity-avatar">{entry.actor === "agent" ? <Sparkles size={12} /> : entry.actor === "human" ? "Y" : "S"}</span>
-                      <div><p>{entry.description}</p><small>{formatActivityTime(entry.timestamp)}{debugMode ? ` · v${entry.version}` : ""}</small></div>
+                      <div><p>{localizeMessage(entry.description, unit)}</p><small>{formatActivityTime(entry.timestamp)}{debugMode ? ` · v${entry.version}` : ""}</small></div>
                     </div>
                   ))}
                   {!filteredActivity.length && <p className="empty-activity">No {activityFilter} activity yet.</p>}
@@ -1942,7 +1971,7 @@ export default function Studio() {
                     return (
                     <button key={issue.id} type="button" onClick={() => focusIssue(issue.id)}>
                       <span className={`issue-severity ${issue.severity}`}><CircleAlert size={14} /></span>
-                      <div><b>{issue.code.replaceAll("_", " ")}{matchingIssues.length > 1 ? ` · ${matchingIndex + 1}/${matchingIssues.length}` : ""}</b><strong>{issue.elementIds.map((id) => elementLabel(project, id)).join(" + ") || "Project site"}</strong><p>{issue.message}</p><small>{issue.suggestion}</small></div>
+                      <div><b>{issue.code.replaceAll("_", " ")}{matchingIssues.length > 1 ? ` · ${matchingIndex + 1}/${matchingIssues.length}` : ""}</b><strong>{issue.elementIds.map((id) => elementLabel(project, id)).join(" + ") || "Project site"}</strong><p>{localizeMessage(issue.message, unit)}</p><small>{localizeMessage(issue.suggestion, unit)}</small></div>
                     </button>
                   );})}
                 </div>
@@ -1961,7 +1990,7 @@ export default function Studio() {
             <div className="modal-heading"><div><span><CircleHelp size={18} /></span><div><small>STUDIO GUIDE</small><h2 id="studio-help-title">Design with confidence</h2></div></div><button ref={helpCloseRef} type="button" onClick={() => setHelpOpen(false)} aria-label="Close help"><X size={18} /></button></div>
             <div className="help-grid">
               <div><h3>Getting started</h3><ol><li>Place rooms from the Design library.</li><li>Draw walls and measurements by dragging, or by clicking the start point and then the end point.</li><li>Click once to place rooms, openings, stairs, balconies, and terraces.</li><li>Use Select to drag rooms, stairs, balconies, terraces, and independent walls.</li><li>Use Properties for precise dimensions, then run Checks and explore in 3D.</li></ol></div>
-              <div><h3>Keyboard shortcuts</h3><dl>{toolItems.map((item) => <div key={item.id}><dt><kbd>{item.key}</kbd></dt><dd>{item.label}</dd></div>)}<div><dt><kbd>Arrows</kbd></dt><dd>Move a selected room by 6 in; hold Shift for 1 ft</dd></div><div><dt><kbd>⌥ + ↑</kbd></dt><dd>Resize a selected room; hold Shift for 1 ft</dd></div><div><dt><kbd>⌘Z</kbd></dt><dd>Undo design edit</dd></div><div><dt><kbd>?</kbd></dt><dd>Open this guide</dd></div><div><dt><kbd>Esc</kbd></dt><dd>Close or return to Select</dd></div></dl></div>
+              <div><h3>Keyboard shortcuts</h3><dl>{toolItems.map((item) => <div key={item.id}><dt><kbd>{item.key}</kbd></dt><dd>{item.label}</dd></div>)}<div><dt><kbd>Arrows</kbd></dt><dd>Move a selected room by {unit === "m" ? "0.15 m" : "6 in"}; hold Shift for {formatLength(1, unit, { word: true })}</dd></div><div><dt><kbd>⌥ + ↑</kbd></dt><dd>Resize a selected room; hold Shift for {formatLength(1, unit, { word: true })}</dd></div><div><dt><kbd>⌘Z</kbd></dt><dd>Undo design edit</dd></div><div><dt><kbd>?</kbd></dt><dd>Open this guide</dd></div><div><dt><kbd>Esc</kbd></dt><dd>Close or return to Select</dd></div></dl></div>
             </div>
             <p className="help-note"><b>Your work stays on this device.</b> ArchMorph autosaves locally. Export Project JSON for a portable backup. Layout Checks are geometric guidance, not building-code, structural, or permit approval.</p>
           </section>
@@ -2002,7 +2031,8 @@ export default function Studio() {
       <ChatPanel />
       <AccountButton onProjectsPulled={() => setSavedProjects(listSavedProjects())} />
 
-      {toast && <div className="toast" role="status" aria-live="polite"><Check size={15} /><span>{toast.message}</span>{toast.action === "undo" && <button type="button" onClick={() => { undo(); setToast(undefined); }}>Undo</button>}{toast.download && <><a href={toast.download.url} download={toast.download.filename} onClick={() => window.setTimeout(() => setToast(undefined), 250)}>Save file</a><a href={toast.download.url} target="_blank" rel="noopener noreferrer">Open preview</a></>}</div>}
+      {toast && <div className="toast" role="status" aria-live="polite"><Check size={15} /><span>{localizeMessage(toast.message, unit)}</span>{toast.action === "undo" && <button type="button" onClick={() => { undo(); setToast(undefined); }}>Undo</button>}{toast.download && <><a href={toast.download.url} download={toast.download.filename} onClick={() => window.setTimeout(() => setToast(undefined), 250)}>Save file</a><a href={toast.download.url} target="_blank" rel="noopener noreferrer">Open preview</a></>}</div>}
     </main>
+    </UnitContext.Provider>
   );
 }

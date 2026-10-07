@@ -8,6 +8,7 @@
     "start": "vinext start",
     "lint": "eslint",
     "test:architecture": "node --experimental-strip-types scripts/architecture-regression.ts",
+    "test:units": "node --experimental-strip-types scripts/units-regression.ts",
     "test:webmcp": "node --experimental-strip-types scripts/webmcp-regression.ts",
     "test:ratelimit": "node --experimental-strip-types scripts/rate-limit-regression.ts"
   },

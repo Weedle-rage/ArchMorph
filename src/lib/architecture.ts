@@ -7,6 +7,7 @@ import {
   rectOverlapArea,
   type FurnitureKind,
 } from "./furniture.ts";
+import { isUnitSystem, type UnitSystem } from "./units.ts";
 
 export type Actor = "human" | "agent" | "system";
 export type ViewMode = "2d" | "3d";
@@ -303,7 +304,7 @@ export type Project = {
   schemaVersion: number;
   id: string;
   name: string;
-  unit: "ft";
+  unit: UnitSystem;
   plot: Plot;
   floors: Floor[];
   rooms: Room[];
@@ -609,6 +610,7 @@ export type ArchitectureOperation =
       color?: string;
     }
   | { type: "delete_furniture"; furnitureId: string }
+  | { type: "set_units"; unit: UnitSystem }
   | {
       type: "add_facade_feature";
       kind: FacadeFeatureKind;
@@ -682,7 +684,7 @@ export function createInitialProject(): Project {
   };
 
   return {
-    schemaVersion: 8,
+    schemaVersion: 9,
     id: "project-archmorph-home",
     name: "Untitled Residence",
     unit: "ft",
@@ -1819,7 +1821,8 @@ function roomFromVertices(room: Room, vertices: PlanPoint[], shape: RoomShape = 
 
 export function migrateProject(input: Project): Project {
   const project = cloneProject(input);
-  project.schemaVersion = 8;
+  project.schemaVersion = 9;
+  project.unit = isUnitSystem(project.unit) ? project.unit : "ft";
   project.exteriorFinish = exteriorFinishPresets[project.exteriorFinish] ? project.exteriorFinish : "stucco";
   project.roof = {
     type: "flat",
@@ -2894,6 +2897,14 @@ export function applyOperation(
       project.view.focusElementId = undefined;
       description = `${who} created ${floor.name}`;
       result = { floor };
+      break;
+    }
+    case "set_units": {
+      if (!isUnitSystem(operation.unit)) throw new Error("Unit must be ft or m.");
+      if (project.unit === operation.unit) throw new Error(`Units are already ${operation.unit === "m" ? "metres" : "feet"}.`);
+      project.unit = operation.unit;
+      description = `${who} switched the project to ${operation.unit === "m" ? "metres" : "feet"}`;
+      result = { unit: project.unit };
       break;
     }
     case "set_floor_height": {

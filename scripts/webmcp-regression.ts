@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { furnitureKinds } from "../src/lib/furniture.ts";
+import { isClassifiedKey, TOOL_LENGTH_KEYS } from "../src/lib/webmcp-units.ts";
 import {
   applyOperation,
+  cloneProject,
   createInitialProject,
+  migrateProject,
+  type Project,
   type ArchitectureOperation,
   type OperationOutcome,
 } from "../src/lib/architecture.ts";
@@ -138,13 +143,24 @@ const runtime: ToolRuntime = {
 };
 
 const tools = createArchMorphTools(runtime);
+const recordedResults: Array<{ tool: string; result: unknown }> = [];
+for (const tool of tools) {
+  const original = tool.execute;
+  // Keep sync tools sync: several existing checks use assert.throws on execute().
+  tool.execute = (...args: Parameters<typeof original>) => {
+    const out = original(...args);
+    if (out instanceof Promise) return out.then((result) => { recordedResults.push({ tool: tool.name, result }); return result; });
+    recordedResults.push({ tool: tool.name, result: out });
+    return out;
+  };
+}
 const names = tools.map((tool) => tool.name);
 
-assert.equal(tools.length, 61, "ArchMorph should expose exactly 61 canonical tools");
+assert.equal(tools.length, 62, "ArchMorph should expose exactly 62 canonical tools");
 assert.equal(new Set(names).size, tools.length, "WebMCP tool names must be unique");
 assert.deepEqual(
   Object.fromEntries(["inspect", "edit", "calculate", "present"].map((category) => [category, tools.filter((tool) => tool.category === category).length])),
-  { inspect: 9, edit: 40, calculate: 5, present: 7 },
+  { inspect: 9, edit: 41, calculate: 5, present: 7 },
   "the documented category counts must match the live catalog",
 );
 
@@ -397,6 +413,100 @@ assert.equal(exported.projectVersion, project.version, "exports should identify 
   );
   await furnitureTool("delete_furniture").execute({ furnitureId: sofaId });
   assert.equal(project.furniture.length, 0);
+}
+
+{
+  const toolByName = (name: string) => tools.find((tool) => tool.name === name)!;
+  project = createInitialProject();
+
+  // Review focus 3: the same room sent in feet to a feet project and in metres to a metric project is identical geometry.
+  await toolByName("create_room").execute({ floorId: project.view.activeFloorId, name: "Study", roomType: "Bedroom", x: 5, y: 12, width: 12, length: 12 });
+  const inFeet = project.rooms[0];
+  project = createInitialProject();
+  const switched = await toolByName("set_units").execute({ unit: "m" }) as { unit: string };
+  assert.equal(switched.unit, "m");
+  assert.equal(project.unit, "m");
+  await toolByName("create_room").execute({ floorId: project.view.activeFloorId, name: "Study", roomType: "Bedroom", x: 1.524, y: 3.6576, width: 3.6576, length: 3.6576 });
+  const inMetres = project.rooms[0];
+  assert.deepEqual([inMetres.x, inMetres.y, inMetres.width, inMetres.length], [inFeet.x, inFeet.y, inFeet.width, inFeet.length], "metres in, feet stored");
+  assert.deepEqual([inMetres.x, inMetres.width], [5, 12]);
+
+  // Outputs come back in project units, with the unit echoed.
+  const floor = await toolByName("inspect_floor").execute({ floorId: project.view.activeFloorId, detail: "full" }) as { rooms: Array<{ id: string; width: number; length: number }> };
+  assert.equal(floor.rooms[0].width, 3.66, "room width is reported in metres");
+  const area = await toolByName("calculate_room_area").execute({ roomId: project.rooms[0].id }) as { netRoomArea: number; unit: string };
+  assert.equal(area.unit, "m²", "area results echo the area unit");
+  assert.equal(area.netRoomArea, 13.38, "144 sq ft is 13.38 m²");
+  const overview = await toolByName("inspect_project").execute({}) as { project: { unit: string } };
+  assert.equal(overview.project.unit, "m");
+
+  // Errors are localised for the agent.
+  await assert.rejects(
+    async () => toolByName("set_floor_height").execute({ floorId: project.view.activeFloorId, height: 1 }),
+    /between 2\.13 and 4\.88 m/,
+  );
+
+  // Review focus 4: schemas carry no feet-valued bounds on lengths, and descriptions name project units.
+  const roomSchema = toolByName("create_room").inputSchema as { properties: Record<string, Record<string, unknown>> };
+  assert.equal(roomSchema.properties.width.minimum, undefined, "a metric client must be able to send 2.5 for a width");
+  assert.equal(roomSchema.properties.width.maximum, undefined);
+  assert.ok(/project units/.test(toolByName("create_room").description), "descriptions say project units, not feet");
+  assert.ok(!/\bfeet\b/.test(JSON.stringify(roomSchema)), "no schema text says feet");
+  await toolByName("create_room").execute({ floorId: project.view.activeFloorId, name: "Small", roomType: "Bedroom", x: 1.8288, y: 8.5344, width: 2.5, length: 3.2 });
+  assert.equal(project.rooms[project.rooms.length - 1].width, 8.2, "2.5 m is 8.2 ft");
+
+  // Switching back restores feet.
+  await toolByName("set_units").execute({ unit: "ft" });
+  assert.equal(project.unit, "ft");
+  const backInFeet = await toolByName("inspect_floor").execute({ floorId: project.view.activeFloorId, detail: "full" }) as { rooms: Array<{ width: number }> };
+  assert.equal(backInFeet.rooms[0].width, 12);
+
+  // Review focus 3: every numeric key a tool accepts or returns is classified as length, area or unitless.
+  const sweep = migrateProject(JSON.parse(fs.readFileSync("fixtures/aurora-house-30x95.archmorph.json", "utf8")).project as Project);
+  const ids: Record<string, string | undefined> = {
+    floorId: sweep.floors[0].id, roomId: sweep.rooms[0]?.id, wallId: sweep.walls[0]?.id, openingId: sweep.openings[0]?.id,
+    stairId: sweep.stairs[0]?.id, balconyId: sweep.balconies[0]?.id, elementId: sweep.rooms[0]?.id, featureId: sweep.facadeFeatures[0]?.id,
+  };
+  const unclassified = new Set<string>();
+  const collect = (value: unknown, toolName: string, where: string) => {
+    if (Array.isArray(value)) { value.forEach((item) => collect(item, toolName, where)); return; }
+    if (!value || typeof value !== "object") return;
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if (typeof child === "number" && !isClassifiedKey(key, toolName)) unclassified.add(`${where}:${toolName}.${key}`);
+      else collect(child, toolName, where);
+    }
+  };
+  const numericSchemaKeys = (schema: unknown, toolName: string) => {
+    const walk = (node: unknown) => {
+      if (!node || typeof node !== "object") return;
+      const record = node as Record<string, unknown>;
+      const properties = record.properties as Record<string, Record<string, unknown>> | undefined;
+      for (const [key, definition] of Object.entries(properties ?? {})) {
+        if ((definition.type === "number" || definition.type === "integer") && !isClassifiedKey(key, toolName)) unclassified.add(`input:${toolName}.${key}`);
+        walk(definition);
+        if (definition.items) walk(definition.items);
+      }
+    };
+    walk(schema);
+  };
+  for (const tool of tools) {
+    numericSchemaKeys(tool.inputSchema, tool.name);
+    project = cloneProject(sweep);
+    const schema = tool.inputSchema as { properties?: Record<string, Record<string, unknown>>; required?: string[] };
+    const input: Record<string, unknown> = {};
+    for (const key of schema.required ?? []) {
+      const definition = schema.properties?.[key] ?? {};
+      if (ids[key]) input[key] = ids[key];
+      else if (Array.isArray(definition.enum)) input[key] = definition.enum[0];
+      else if (definition.type === "number" || definition.type === "integer") input[key] = 4;
+      else if (definition.type === "string") input[key] = "x";
+      else if (definition.type === "boolean") input[key] = true;
+    }
+    try { await tool.execute(input); } catch { /* many tools need real geometry; their results are covered by the recorded run below */ }
+  }
+  for (const { tool, result } of recordedResults) collect(result, tool, "output");
+  assert.deepEqual([...unclassified].sort(), [], "classify these numeric keys in src/lib/webmcp-units.ts (LENGTH_KEYS, AREA_KEYS or UNITLESS_KEYS)");
+  assert.deepEqual(Object.keys(TOOL_LENGTH_KEYS), ["set_exact_dimension"]);
 }
 
 console.log(`WebMCP regression passed: ${landingTools.length} landing tools, ${tools.length} studio tools, ${expectedReadOnly.size} read-only studio tools, inspect_floor summary ${summary.length} vs full ${full.length} chars, representative execution verified.`);
