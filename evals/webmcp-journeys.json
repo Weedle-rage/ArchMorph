@@ -77,6 +77,19 @@
       "assertions": ["Vertices are orthogonal", "Room has a stable ID", "Area and validation evidence are returned", "Visible focus matches created room"]
     },
     {
+      "id": "sequence-furnish-a-bedroom",
+      "layer": "sequence",
+      "prompt": "Furnish the bedroom with a double bed and two bedside tables, then try to add an oversized wardrobe.",
+      "expectedTools": ["inspect_floor", "list_furniture_kinds", "add_furniture", "validate_layout"],
+      "mustNotSelect": ["create_room", "delete_room"],
+      "assertions": [
+        "The double bed and both bedside tables are placed inside the bedroom without overlapping",
+        "Each placement is one undoable step",
+        "The oversized wardrobe request fails with an error that names the item and the room",
+        "validate_layout reports no furniture issues afterwards"
+      ]
+    },
+    {
       "id": "sequence-floor-and-stair",
       "layer": "full-journey",
       "prompt": "Create a second floor and a connected straight stair. Verify the stair and room circulation, switch to 3D, and focus the stair.",

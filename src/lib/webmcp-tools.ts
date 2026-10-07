@@ -11,6 +11,7 @@ import {
   type StairTurnSide,
   type ExteriorFinishId,
   type FacadeFeatureKind,
+  type FurnitureRotation,
   type RailingStyle,
   type WallSide,
   type ValidationReport,
@@ -26,6 +27,7 @@ import {
   roomCarpetArea,
   validateLayout,
 } from "./architecture.ts";
+import { furnitureCatalog, furnitureKinds, type FurnitureKind } from "./furniture.ts";
 
 export type ToolRuntime = {
   getProject: () => Project;
@@ -938,6 +940,71 @@ export function createArchMorphTools(runtime: ToolRuntime): ArchMorphTool[] {
       description: "Delete one balcony or terrace and its derived slab and railing representations.",
       inputSchema: { type: "object", properties: { balconyId: { type: "string" } }, required: ["balconyId"], additionalProperties: false },
       execute: (input) => runtime.perform({ type: "delete_balcony", balconyId: requiredString(input, "balconyId") }).result,
+    },
+    {
+      name: "list_furniture_kinds",
+      category: "inspect",
+      description: "List the furniture catalog: every kind with its default width, length and height in feet. Call this before add_furniture.",
+      annotations: readOnly,
+      inputSchema: emptyObject,
+      execute: () => ({
+        unit: "ft",
+        kinds: furnitureKinds.map((kind) => ({ kind, ...furnitureCatalog[kind] })),
+      }),
+    },
+    {
+      name: "add_furniture",
+      category: "edit",
+      description: "Place one piece of schematic furniture inside a room. Omit x and y to auto-place it at the first free spot. x and y are feet from the room's top-left corner; overlaps and walls are rejected.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          roomId,
+          kind: { type: "string", enum: [...furnitureKinds], description: "Catalog kind from list_furniture_kinds." },
+          name: { type: "string" },
+          x: { type: "number", minimum: 0, description: "Footprint left edge, feet from the room's left side." },
+          y: { type: "number", minimum: 0, description: "Footprint top edge, feet from the room's top side." },
+          width: { type: "number", minimum: 0.5 }, length: { type: "number", minimum: 0.5 },
+          height: { type: "number", minimum: 0.25, maximum: 8 },
+          rotation: { type: "number", enum: [0, 90, 180, 270], description: "Degrees. 90 and 270 swap the plan footprint." },
+        },
+        required: ["roomId", "kind"], additionalProperties: false,
+      },
+      execute: (input) => runtime.perform({
+        type: "add_furniture", roomId: requiredString(input, "roomId"), kind: requiredString(input, "kind") as FurnitureKind,
+        name: optionalString(input, "name"), x: optionalNumber(input, "x"), y: optionalNumber(input, "y"),
+        width: optionalNumber(input, "width"), length: optionalNumber(input, "length"), height: optionalNumber(input, "height"),
+        rotation: optionalNumber(input, "rotation") as FurnitureRotation | undefined,
+      }).result,
+    },
+    {
+      name: "update_furniture",
+      category: "edit",
+      description: "Move, resize, rotate or rename one piece of furniture. The result must still sit inside its room without overlapping other furniture.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          furnitureId: { type: "string", description: "Stable furniture identifier returned by add_furniture or inspect_floor." },
+          name: { type: "string" }, x: { type: "number", minimum: 0 }, y: { type: "number", minimum: 0 },
+          width: { type: "number", minimum: 0.5 }, length: { type: "number", minimum: 0.5 },
+          height: { type: "number", minimum: 0.25, maximum: 8 },
+          rotation: { type: "number", enum: [0, 90, 180, 270] }, color: { type: "string" },
+        },
+        required: ["furnitureId"], additionalProperties: false,
+      },
+      execute: (input) => runtime.perform({
+        type: "update_furniture", furnitureId: requiredString(input, "furnitureId"), name: optionalString(input, "name"),
+        x: optionalNumber(input, "x"), y: optionalNumber(input, "y"), width: optionalNumber(input, "width"),
+        length: optionalNumber(input, "length"), height: optionalNumber(input, "height"),
+        rotation: optionalNumber(input, "rotation") as FurnitureRotation | undefined, color: optionalString(input, "color"),
+      }).result,
+    },
+    {
+      name: "delete_furniture",
+      category: "edit",
+      description: "Delete one piece of furniture.",
+      inputSchema: { type: "object", properties: { furnitureId: { type: "string" } }, required: ["furnitureId"], additionalProperties: false },
+      execute: (input) => runtime.perform({ type: "delete_furniture", furnitureId: requiredString(input, "furnitureId") }).result,
     },
     {
       name: "add_facade_feature",
