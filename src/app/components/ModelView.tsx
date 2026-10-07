@@ -22,6 +22,7 @@ import {
   type Project,
 } from "@/lib/architecture";
 import { buildSpatialModel, openingFrameFor, orientedSlopeFrame, resolveWalkPosition } from "@/lib/spatial3d";
+import { furnitureBoxes, furnitureCatalog, furnitureFootprint } from "@/lib/furniture";
 
 type ModelViewProps = {
   project: Project;
@@ -503,6 +504,25 @@ export default function ModelView({
           const z = alongX ? center[1] : balcony.y + span * progress;
           addRailPiece([0.12, balcony.railing.height, 0.12], [x, slabTop + balcony.railing.height / 2, z]);
         }
+      }
+    }
+
+    for (const item of project.furniture) {
+      const floor = floorById.get(item.floorId);
+      const host = project.rooms.find((room) => room.id === item.roomId);
+      if (!floor || !host) continue;
+      const selected = selectedId === item.id;
+      const floorTop = floor.elevation + FLOOR_SLAB_THICKNESS;
+      const material = new THREE.MeshStandardMaterial({
+        color: colorWithSelection(item.color ?? furnitureCatalog[item.kind]?.color ?? "#c9c3b8", selected),
+        roughness: 0.85,
+        metalness: 0.02,
+      });
+      for (const part of furnitureBoxes(item, furnitureFootprint(item, { x: host.x, y: host.y }))) {
+        const mesh = meshBox([part.w, part.h, part.l], [part.cx, floorTop + part.y0 + part.h / 2, part.cz], 0, material);
+        mesh.userData.elementId = item.id;
+        selectable.push(mesh);
+        scene.add(mesh);
       }
     }
 

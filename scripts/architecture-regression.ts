@@ -38,6 +38,7 @@ import {
   findFreeFurniturePosition,
   footprintFitsPolygon,
   furnitureCatalog,
+  furnitureBoxes,
   furnitureFootprint,
   furnitureKinds,
   rectOverlapArea,
@@ -1010,6 +1011,25 @@ const furnitureFixture = () => {
   const overview = projectInspection(furnished);
   assert.equal(overview.counts.furniture, 1);
   assert.equal(overview.furniture.length, 1);
+}
+
+{
+  const rect = { x: 10, y: 20, w: 5, l: 6.67 };
+  const wardrobe = furnitureBoxes({ kind: "wardrobe", height: 6.5, rotation: 0 }, { x: 10, y: 20, w: 4, l: 2 });
+  assert.deepEqual(wardrobe, [{ cx: 12, cz: 21, w: 4, l: 2, y0: 0, h: 6.5 }], "most kinds are a single box over the footprint");
+
+  const bed = furnitureBoxes({ kind: "double-bed", height: 2, rotation: 0 }, rect);
+  assert.equal(bed.length, 2, "a bed is a frame plus a headboard");
+  const headboard = bed[1];
+  assert.ok(headboard.cz < rect.y + 1, "at rotation 0 the headboard is on the north (low y) edge");
+  assert.ok(headboard.h > bed[0].h, "the headboard is taller than the frame");
+
+  const east = furnitureBoxes({ kind: "double-bed", height: 2, rotation: 90 }, { x: 10, y: 20, w: 6.67, l: 5 })[1];
+  assert.ok(east.cx > 10 + 6.67 - 1, "at rotation 90 the headboard is on the east edge");
+  const south = furnitureBoxes({ kind: "single-bed", height: 2, rotation: 180 }, rect)[1];
+  assert.ok(south.cz > rect.y + rect.l - 1, "at rotation 180 the headboard is on the south edge");
+  const west = furnitureBoxes({ kind: "single-bed", height: 2, rotation: 270 }, { x: 10, y: 20, w: 6.25, l: 3.25 })[1];
+  assert.ok(west.cx < 10 + 1, "at rotation 270 the headboard is on the west edge");
 }
 
 console.log(JSON.stringify({

@@ -154,3 +154,31 @@ export function findFreeFurniturePosition(args: {
   }
   return undefined;
 }
+
+export type FurnitureBox = { cx: number; cz: number; w: number; l: number; y0: number; h: number };
+
+const HEADBOARD_THICKNESS = 0.25;
+
+/**
+ * Plan-axis boxes for the 3D view, in plan coordinates with heights measured from the floor top.
+ * Most kinds are one box over the footprint; beds add a taller headboard on the head side, which is
+ * north at rotation 0 and turns clockwise with the item.
+ */
+export function furnitureBoxes(
+  item: Pick<Furniture, "kind" | "height" | "rotation">,
+  rect: FootprintRect,
+): FurnitureBox[] {
+  const cx = rect.x + rect.w / 2;
+  const cz = rect.y + rect.l / 2;
+  if (item.kind !== "single-bed" && item.kind !== "double-bed") {
+    return [{ cx, cz, w: rect.w, l: rect.l, y0: 0, h: item.height }];
+  }
+  const frameHeight = item.height * 0.55;
+  const frame: FurnitureBox = { cx, cz, w: rect.w, l: rect.l, y0: 0, h: frameHeight };
+  const headHeight = item.height + 0.9;
+  const t = HEADBOARD_THICKNESS;
+  if (item.rotation === 0) return [frame, { cx, cz: rect.y + t / 2, w: rect.w, l: t, y0: 0, h: headHeight }];
+  if (item.rotation === 90) return [frame, { cx: rect.x + rect.w - t / 2, cz, w: t, l: rect.l, y0: 0, h: headHeight }];
+  if (item.rotation === 180) return [frame, { cx, cz: rect.y + rect.l - t / 2, w: rect.w, l: t, y0: 0, h: headHeight }];
+  return [frame, { cx: rect.x + t / 2, cz, w: t, l: rect.l, y0: 0, h: headHeight }];
+}
