@@ -1032,6 +1032,33 @@ const furnitureFixture = () => {
   assert.ok(west.cx < 10 + 1, "at rotation 270 the headboard is on the west edge");
 }
 
+{
+  // Final review, Important 1: auto-place must treat a staircase as occupied space.
+  let hall = applyOperation(
+    createInitialProject(),
+    { type: "create_room", floorId: "floor-ground", name: "Hall", roomType: "Living Room", x: 5, y: 12, width: 14, length: 14 },
+    "agent",
+  ).project;
+  hall = applyOperation(hall, { type: "add_stairs", floorId: "floor-ground", x: 5, y: 12, width: 3.5, length: 11, direction: "up" }, "agent").project;
+  const placedBed = applyOperation(hall, { type: "add_furniture", roomId: hall.rooms[0].id, kind: "double-bed" }, "agent");
+  const bedRect = (placedBed.result as { footprint: { x: number; y: number; w: number; l: number } }).footprint;
+  const stairRect = stairFootprint(hall.stairs[0]);
+  assert.equal(
+    rectOverlapArea(bedRect, { x: stairRect.x, y: stairRect.y, w: stairRect.width, l: stairRect.length }),
+    0,
+    "an auto-placed bed must not sit on the staircase",
+  );
+
+  // Final review, Important 2: furniture on a floor that does not exist is reported, not silently dropped.
+  const { base: ghostBase, roomId: ghostRoomId } = furnitureFixture();
+  const ghost = cloneProject(applyOperation(ghostBase, { type: "add_furniture", roomId: ghostRoomId, kind: "chair" }, "agent").project);
+  ghost.furniture[0].floorId = "floor-ghost";
+  assert.ok(validateLayout(ghost).issues.some((issue) => issue.code === "FURNITURE_OUTSIDE_ROOM"), "an item on a missing floor is an issue");
+
+  // Final review, Minor 1 (fixed with Important 2): an item whose floor differs from its room's cannot be edited into place.
+  assertOperationRejectedWithoutMutation(ghost, { type: "update_furniture", furnitureId: ghost.furniture[0].id, x: 1 }, /not on the same floor|would extend outside/);
+}
+
 console.log(JSON.stringify({
   project: { id: project.id, schemaVersion: project.schemaVersion, rooms: project.rooms.length, walls: project.walls.length, openings: project.openings.length },
   topology: { sharedWalls: project.walls.filter((wall) => wall.roomIds.length === 2).length, duplicateWallIds: project.walls.length - new Set(project.walls.map((wall) => wall.id)).size },

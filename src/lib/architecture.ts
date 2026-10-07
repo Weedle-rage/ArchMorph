@@ -2083,6 +2083,7 @@ function furnitureOrigin(room: Room) {
 function assertFurniturePlacement(project: Project, item: Furniture) {
   const room = project.rooms.find((candidate) => candidate.id === item.roomId);
   if (!room) throw new Error(`Room ${item.roomId} does not exist.`);
+  if (room.floorId !== item.floorId) throw new Error(`${item.name} is not on the same floor as ${room.name}.`);
   const rect = furnitureFootprint(item, furnitureOrigin(room));
   if (!footprintFitsPolygon(roomVertices(room), rect)) throw new Error(`${item.name} would extend outside ${room.name}.`);
   for (const other of project.furniture) {
@@ -2757,7 +2758,14 @@ export function applyOperation(
           .flatMap((item) => {
             const host = project.rooms.find((candidate) => candidate.id === item.roomId);
             return host ? [furnitureFootprint(item, furnitureOrigin(host))] : [];
-          });
+          })
+          // A staircase (or the stairwell above it) is not free floor.
+          .concat(project.stairs
+            .filter((stair) => elementFloorIds(project, stair.id).includes(room.floorId))
+            .map((stair) => {
+              const footprint = stairFootprint(stair);
+              return { x: footprint.x, y: footprint.y, w: footprint.width, l: footprint.length };
+            }));
         const spot = findFreeFurniturePosition({
           vertices: roomVertices(room),
           origin: furnitureOrigin(room),
@@ -3558,7 +3566,9 @@ export function validateLayout(project: Project, floorId?: string): ValidationRe
     });
   }
 
-  const targetFurniture = project.furniture.filter((item) => targetFloors.includes(item.floorId));
+  // Items on a floor that no longer exists would otherwise be invisible and unreachable, so a whole-project run reports them too.
+  const targetFurniture = project.furniture.filter((item) => targetFloors.includes(item.floorId)
+    || (!floorId && !project.floors.some((floor) => floor.id === item.floorId)));
   for (const item of targetFurniture) {
     const host = project.rooms.find((room) => room.id === item.roomId);
     const fits = host !== undefined
