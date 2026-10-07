@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import {
   type Balcony,
+  type Furniture,
   type Opening,
   type Project,
   type Room,
@@ -23,6 +24,7 @@ import {
   stairPlanPoint,
   wallLength,
 } from "@/lib/architecture";
+import { furnitureCatalog, furnitureFootprint } from "@/lib/furniture";
 
 export type CanvasTool = "select" | "room" | "wall" | "door" | "window" | "stair" | "measure" | "balcony";
 
@@ -41,6 +43,7 @@ type DragState =
   | { kind: "move-wall"; id: string; start: Point; origin: Wall; wall: Wall }
   | { kind: "move-stair"; id: string; start: Point; origin: Stair; stair: Stair }
   | { kind: "move-balcony"; id: string; start: Point; origin: Point; balcony: Balcony }
+  | { kind: "move-furniture"; id: string; start: Point; origin: Point; item: Furniture }
   | SpanDragState;
 
 /** Shortest span each tool accepts, in feet, below which a gesture is a click rather than a drag. */
@@ -65,6 +68,7 @@ type FloorPlanProps = {
   onMoveStair: (id: string, x: number, y: number) => void;
   onAddBalcony: (point: Point) => void;
   onMoveBalcony: (id: string, x: number, y: number) => void;
+  onMoveFurniture: (id: string, x: number, y: number) => void;
 };
 
 const snap = (value: number, grid = 0.5) => round(Math.round(value / grid) * grid);
@@ -105,6 +109,7 @@ export default function FloorPlan({
   onMoveStair,
   onAddBalcony,
   onMoveBalcony,
+  onMoveFurniture,
 }: FloorPlanProps) {
   const floorId = project.view.activeFloorId;
   const [drag, setDrag] = useState<DragState>();
@@ -124,6 +129,7 @@ export default function FloorPlan({
   const openings = project.openings.filter((opening) => opening.floorId === floorId);
   const stairs = project.stairs.filter((stair) => stair.floorId === floorId);
   const balconies = project.balconies.filter((balcony) => balcony.floorId === floorId);
+  const furnishings = project.furniture.filter((item) => item.floorId === floorId);
   const facadeFeatures = project.facadeFeatures.filter((feature) => walls.some((wall) => wall.id === feature.wallId));
   const linkedStairs = project.stairs.filter((stair) => {
     const connection = stairConnection(project, stair);
@@ -278,6 +284,14 @@ export default function FloorPlan({
     setDrag({ kind: "move-balcony", id: balcony.id, start: toPoint(event), origin: { x: balcony.x, y: balcony.y }, balcony });
   };
 
+  const handleFurniturePointerDown = (event: ReactPointerEvent<SVGGElement>, item: Furniture) => {
+    if (tool !== "select") return;
+    event.stopPropagation();
+    onSelect(item.id);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDrag({ kind: "move-furniture", id: item.id, start: toPoint(event), origin: { x: item.x, y: item.y }, item });
+  };
+
   const handleRoomPointerDown = (event: ReactPointerEvent<SVGElement>, room: Room) => {
     if (tool !== "select") return;
     event.stopPropagation();
@@ -384,6 +398,13 @@ export default function FloorPlan({
       const x = Math.max(0, Math.min(project.plot.width - drag.balcony.width, snap(drag.origin.x + dx)));
       const y = Math.max(0, Math.min(project.plot.length - drag.balcony.length, snap(drag.origin.y + dy)));
       setDrag({ ...drag, balcony: { ...drag.balcony, x, y } });
+    } else if (drag.kind === "move-furniture") {
+      const dx = point.x - drag.start.x;
+      const dy = point.y - drag.start.y;
+      // Offsets are room-relative; the operation rejects anything that leaves the room or overlaps.
+      const x = Math.max(0, snap(drag.origin.x + dx));
+      const y = Math.max(0, snap(drag.origin.y + dy));
+      setDrag({ ...drag, item: { ...drag.item, x, y } });
     }
   };
 
@@ -416,6 +437,9 @@ export default function FloorPlan({
     }
     if (drag.kind === "move-balcony" && (drag.balcony.x !== drag.origin.x || drag.balcony.y !== drag.origin.y)) {
       onMoveBalcony(drag.id, drag.balcony.x, drag.balcony.y);
+    }
+    if (drag.kind === "move-furniture" && (drag.item.x !== drag.origin.x || drag.item.y !== drag.origin.y)) {
+      onMoveFurniture(drag.id, drag.item.x, drag.item.y);
     }
     setDrag(undefined);
     setAlignmentGuides({});
@@ -599,6 +623,22 @@ export default function FloorPlan({
           const x2 = center.x + tx * feature.width / 2 + normal.x * projection;
           const y2 = center.y + ty * feature.width / 2 + normal.y * projection;
           return <line key={feature.id} x1={x1} y1={y1} x2={x2} y2={y2} stroke={selectedId === feature.id ? "#d65b32" : "#866d55"} strokeWidth={selectedId === feature.id ? 0.4 : Math.max(0.18, feature.thickness)} strokeLinecap="square" onPointerDown={(event) => { if (tool !== "select") return; event.stopPropagation(); onSelect(feature.id); }}><title>{feature.kind} · {feature.width} ft</title></line>;
+        })}
+      </g>
+
+      <g className="furniture" pointerEvents={tool === "select" ? undefined : "none"}>
+        {furnishings.map((rawItem) => {
+          const item = drag?.kind === "move-furniture" && drag.id === rawItem.id ? drag.item : rawItem;
+          const host = project.rooms.find((room) => room.id === item.roomId);
+          if (!host) return null;
+          const rect = furnitureFootprint(item, { x: host.x, y: host.y });
+          const selected = selectedId === item.id;
+          const label = furnitureCatalog[item.kind]?.shortLabel ?? item.name;
+          return <g key={item.id} className={`furniture-item ${selected ? "is-selected" : ""}`} onPointerDown={(event) => handleFurniturePointerDown(event, item)}>
+            <title>{item.name} · {item.width} × {item.length} ft</title>
+            <rect x={rect.x} y={rect.y} width={rect.w} height={rect.l} fill="#e7dfd0" fillOpacity="0.85" stroke={selected ? "#d65b32" : "#8a7a64"} strokeWidth={selected ? 0.28 : 0.1} />
+            {Math.min(rect.w, rect.l) >= 1.6 && <text x={rect.x + rect.w / 2} y={rect.y + rect.l / 2 + 0.22} textAnchor="middle" fontSize="0.6" fontWeight="700" fill="#5d5240" pointerEvents="none">{label}</text>}
+          </g>;
         })}
       </g>
 

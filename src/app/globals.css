@@ -100,7 +100,7 @@ code, kbd, pre { font-family: var(--font-geist-mono), monospace; }
 .panel-mobile-head small { color: #68716c; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
 .panel-mobile-head b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .panel-mobile-head button { width: 36px; height: 36px; display: grid; place-items: center; border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
-.library-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: center; gap: 3px; padding: 4px 6px; border-bottom: 1px solid var(--line-dark); background: #f4f5f2; }
+.library-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); align-items: center; gap: 3px; padding: 4px 6px; border-bottom: 1px solid var(--line-dark); background: #f4f5f2; }
 .library-tabs button { min-width: 0; min-height: 44px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #66706a; font-size: 10px; font-weight: 750; letter-spacing: -.01em; white-space: nowrap; cursor: pointer; }
 .library-tabs button:hover { background: #e9ece8; color: var(--ink); }
 .library-tabs button.is-active { border-color: #d5dad5; background: #fff; color: var(--ink); box-shadow: 0 1px 4px rgb(29 37 32 / 9%); }

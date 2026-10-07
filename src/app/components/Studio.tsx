@@ -2,6 +2,7 @@
 /* eslint-disable react-hooks/refs -- WebMCP callbacks need an imperative pointer to the latest shared project. */
 
 import {
+  Armchair,
   Box,
   Braces,
   Building2,
@@ -88,10 +89,12 @@ import {
   type StairTurnSide,
   type ExteriorFinishId,
   type FacadeFeatureKind,
+  type FurnitureRotation,
   type RailingStyle,
   type ValidationReport,
   type Wall,
 } from "@/lib/architecture";
+import { furnitureCatalog, furnitureKinds, type FurnitureKind } from "@/lib/furniture";
 import {
   createNewLocalProject,
   deleteLocalProject,
@@ -112,7 +115,7 @@ import ModelView from "./ModelView";
 
 type InspectorTab = "properties" | "activity" | "checks";
 type ActivityFilter = "design" | "view" | "all";
-type LibraryTab = "spaces" | "levels" | "exterior" | "browse";
+type LibraryTab = "spaces" | "levels" | "exterior" | "furniture" | "browse";
 type ToastState = {
   message: string;
   action?: "undo";
@@ -145,6 +148,7 @@ const libraryTabs: Array<{ id: LibraryTab; label: string; description: string }>
   { id: "spaces", label: "Spaces", description: "Place room templates" },
   { id: "levels", label: "Levels", description: "Manage floors and stairs" },
   { id: "exterior", label: "Exterior", description: "Configure the site and building exterior" },
+  { id: "furniture", label: "Furniture", description: "Place basic furniture in rooms" },
   { id: "browse", label: "Browse", description: "Find elements on the active floor" },
 ];
 
@@ -270,6 +274,8 @@ function elementLabel(project: Project, id?: string) {
     const where = host ? `${wallKindLabel(project, host)} ${wallSpanLabel(host)} @ ${round(feature.offset, 1)}′` : "exterior feature";
     return `${feature.kind[0].toUpperCase()}${feature.kind.slice(1)} ${round(feature.width, 1)}′ · ${where}`;
   }
+  const furniture = project.furniture.find((item) => item.id === id);
+  if (furniture) return `${furniture.name} ${furniture.width}′ × ${furniture.length}′ · ${floorName(furniture.floorId)}`;
   return id;
 }
 
@@ -841,7 +847,12 @@ export default function Studio() {
     const room = projectRef.current.rooms.find((item) => item.id === selectedId);
     const label = elementLabel(projectRef.current, selectedId);
     try {
-      commit(room ? { type: "delete_room", roomId: selectedId } : { type: "delete_element", elementId: selectedId });
+      const isFurniture = projectRef.current.furniture.some((item) => item.id === selectedId);
+      commit(room
+        ? { type: "delete_room", roomId: selectedId }
+        : isFurniture
+          ? { type: "delete_furniture", furnitureId: selectedId }
+          : { type: "delete_element", elementId: selectedId });
       setSelectedId(undefined);
       notify(`Deleted ${label}`, "undo");
     } catch {
@@ -886,6 +897,14 @@ export default function Studio() {
             const y = Math.max(0, room.y + (key === "arrowdown" ? amount : key === "arrowup" ? -amount : 0));
             try { commit({ type: "move_room", roomId: room.id, x, y }); } catch { /* commit announces invalid geometry */ }
           }
+          return;
+        }
+      }
+      if (key === "r" && selectedId) {
+        const item = projectRef.current.furniture.find((candidate) => candidate.id === selectedId);
+        if (item) {
+          event.preventDefault();
+          try { commit({ type: "update_furniture", furnitureId: item.id, rotation: ((item.rotation + 90) % 360) as FurnitureRotation }); } catch { /* commit announces why it cannot rotate */ }
           return;
         }
       }
@@ -978,6 +997,7 @@ export default function Studio() {
   const selectedOpening = project.openings.find((item) => item.id === selectedId);
   const selectedStair = project.stairs.find((item) => item.id === selectedId);
   const selectedBalcony = project.balconies.find((item) => item.id === selectedId);
+  const selectedFurniture = project.furniture.find((item) => item.id === selectedId);
   const selectedFacadeFeature = project.facadeFeatures.find((item) => item.id === selectedId);
   const selectedStairConnection = selectedStair ? stairConnection(project, selectedStair) : undefined;
   const selectedStairRoom = selectedStair && selectedStairConnection ? (() => {
@@ -1079,6 +1099,18 @@ export default function Studio() {
     setBalconyKind(kind);
     activatePlanTool("balcony");
     notify(`Click the plan to place the ${kind}`);
+  };
+
+  const addFurniture = (kind: FurnitureKind) => {
+    const target = selectedRoom ?? (selectedFurniture ? project.rooms.find((room) => room.id === selectedFurniture.roomId) : undefined);
+    if (!target) { notify("Select a room first"); return; }
+    try {
+      const outcome = commit({ type: "add_furniture", roomId: target.id, kind });
+      const furniture = outcome.result.furniture as { id?: string } | undefined;
+      if (furniture?.id) setSelectedId(furniture.id);
+    } catch {
+      // commit announces why it did not fit.
+    }
   };
 
   const createBalconyAt = (point: { x: number; y: number }) => {
@@ -1526,6 +1558,20 @@ export default function Studio() {
             </Section>
           </div>
 
+          <div id="library-panel-furniture" className="panel-scroll" role="tabpanel" aria-labelledby="library-tab-furniture" tabIndex={0} hidden={libraryTab !== "furniture"}>
+            <Section title="Furniture" action={<span className="section-hint">SELECT A ROOM, THEN CLICK</span>}>
+              <div className="room-library">
+                {furnitureKinds.map((kind) => (
+                  <button type="button" key={kind} onClick={() => addFurniture(kind)}>
+                    <span style={{ background: furnitureCatalog[kind].color }} />
+                    <div><b>{furnitureCatalog[kind].label}</b><small>{furnitureCatalog[kind].width}′ × {furnitureCatalog[kind].length}′</small></div>
+                    <Plus size={14} />
+                  </button>
+                ))}
+              </div>
+            </Section>
+          </div>
+
           <div id="library-panel-browse" className="panel-scroll" role="tabpanel" aria-labelledby="library-tab-browse" tabIndex={0} hidden={libraryTab !== "browse"}>
             <Section title="Elements" action={<span className="section-hint">KEYBOARD ACCESSIBLE</span>}>
               <p className="technical-note element-intro">Select an element here to inspect it without using the drawing canvas.</p>
@@ -1595,6 +1641,7 @@ export default function Studio() {
                 onMoveStair={(stairId, x, y) => safeCommit({ type: "update_stairs", stairId, x, y })}
                 onAddBalcony={createBalconyAt}
                 onMoveBalcony={(balconyId, x, y) => safeCommit({ type: "update_balcony", balconyId, x, y })}
+                onMoveFurniture={(furnitureId, x, y) => safeCommit({ type: "update_furniture", furnitureId, x, y })}
               />
             ) : (
               <ModelView
@@ -1661,11 +1708,11 @@ export default function Studio() {
                 )}
                 <div className="selection-title">
                   <span className="selection-icon">
-                    {selectedRoom ? <Square size={17} /> : selectedWall ? <Minus size={17} /> : selectedOpening ? <DoorOpen size={17} /> : selectedStair ? <Layers3 size={17} /> : selectedBalcony ? <PanelTop size={17} /> : selectedFacadeFeature ? <Maximize2 size={17} /> : <Grid2X2 size={17} />}
+                    {selectedRoom ? <Square size={17} /> : selectedWall ? <Minus size={17} /> : selectedOpening ? <DoorOpen size={17} /> : selectedStair ? <Layers3 size={17} /> : selectedFurniture ? <Armchair size={17} /> : selectedBalcony ? <PanelTop size={17} /> : selectedFacadeFeature ? <Maximize2 size={17} /> : <Grid2X2 size={17} />}
                   </span>
                   <div>
-                    <small>{selectedRoom ? selectedRoom.type : selectedWall ? "Wall" : selectedOpening ? selectedOpening.kind : selectedStair ? "Staircase" : selectedBalcony ? selectedBalcony.kind : selectedFacadeFeature ? "Façade feature" : "Project site"}</small>
-                    <h2>{selectedRoom?.name ?? (selectedWall ? selectedWall.roomIds.length > 1 ? "Shared wall" : selectedWall.side ? `${selectedWall.side} wall` : "Independent wall" : selectedOpening ? `${selectedOpening.kind[0].toUpperCase()}${selectedOpening.kind.slice(1)}` : selectedStair ? "Staircase" : selectedBalcony ? selectedBalcony.name : selectedFacadeFeature ? selectedFacadeFeature.kind[0].toUpperCase() + selectedFacadeFeature.kind.slice(1) : project.name)}</h2>
+                    <small>{selectedRoom ? selectedRoom.type : selectedWall ? "Wall" : selectedOpening ? selectedOpening.kind : selectedStair ? "Staircase" : selectedFurniture ? "Furniture" : selectedBalcony ? selectedBalcony.kind : selectedFacadeFeature ? "Façade feature" : "Project site"}</small>
+                    <h2>{selectedRoom?.name ?? (selectedWall ? selectedWall.roomIds.length > 1 ? "Shared wall" : selectedWall.side ? `${selectedWall.side} wall` : "Independent wall" : selectedOpening ? `${selectedOpening.kind[0].toUpperCase()}${selectedOpening.kind.slice(1)}` : selectedStair ? "Staircase" : selectedFurniture ? selectedFurniture.name : selectedBalcony ? selectedBalcony.name : selectedFacadeFeature ? selectedFacadeFeature.kind[0].toUpperCase() + selectedFacadeFeature.kind.slice(1) : project.name)}</h2>
                   </div>
                   {selectedId && <button type="button" onClick={deleteSelected} title="Delete selected element" aria-label={`Delete ${elementLabel(project, selectedId)}`}><Trash2 size={16} /></button>}
                 </div>
@@ -1769,6 +1816,21 @@ export default function Studio() {
                       <p className="technical-note">The dashed plan rectangle is usable floor area outside the stair—not part of the flight. Keep it inside one room and free of crossing walls.</p>
                     </Section>}
                     <button type="button" className="walk-inside-button inspector-walk-button" onClick={() => safeCommit({ type: "set_navigation_mode", mode: "walk", roomId: selectedStairRoom?.id })}><Footprints size={15} /> Test this connection in Walk Mode</button>
+                  </>
+                ) : selectedFurniture ? (
+                  <>
+                    <Section title="Furniture">
+                      <label className="field field-full"><span>Name</span><input key={`${selectedFurniture.id}:${selectedFurniture.name}`} defaultValue={selectedFurniture.name} onBlur={(event) => safeCommit({ type: "update_furniture", furnitureId: selectedFurniture.id, name: event.currentTarget.value })} /></label>
+                      <div className="field-grid">
+                        <NumberField label="X in room" value={selectedFurniture.x} min={0} onCommit={(x) => safeCommit({ type: "update_furniture", furnitureId: selectedFurniture.id, x })} />
+                        <NumberField label="Y in room" value={selectedFurniture.y} min={0} onCommit={(y) => safeCommit({ type: "update_furniture", furnitureId: selectedFurniture.id, y })} />
+                        <NumberField label="Width" value={selectedFurniture.width} min={0.5} step={0.25} onCommit={(width) => safeCommit({ type: "update_furniture", furnitureId: selectedFurniture.id, width })} />
+                        <NumberField label="Length" value={selectedFurniture.length} min={0.5} step={0.25} onCommit={(length) => safeCommit({ type: "update_furniture", furnitureId: selectedFurniture.id, length })} />
+                        <NumberField label="Height" value={selectedFurniture.height} min={0.25} max={8} step={0.25} onCommit={(height) => safeCommit({ type: "update_furniture", furnitureId: selectedFurniture.id, height })} />
+                      </div>
+                      <label className="field field-full"><span>Rotation (R)</span><select value={selectedFurniture.rotation} onChange={(event) => safeCommit({ type: "update_furniture", furnitureId: selectedFurniture.id, rotation: Number(event.target.value) as FurnitureRotation })}>{[0, 90, 180, 270].map((degrees) => <option key={degrees} value={degrees}>{degrees}°</option>)}</select></label>
+                      <div className="detail-list"><span>Kind <b>{furnitureCatalog[selectedFurniture.kind]?.label ?? selectedFurniture.kind}</b></span><span>Room <b>{project.rooms.find((room) => room.id === selectedFurniture.roomId)?.name ?? "Missing room"}</b></span></div>
+                    </Section>
                   </>
                 ) : selectedBalcony ? (
                   <>
