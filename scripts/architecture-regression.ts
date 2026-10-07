@@ -8,6 +8,7 @@ import {
   inspectFloor,
   inspectRoom,
   migrateProject,
+  projectInspection,
   projectMetrics,
   recommendedStairRun,
   round,
@@ -973,6 +974,42 @@ const furnitureFixture = () => {
   const tall = applyOperation(base, { type: "add_furniture", roomId, kind: "wardrobe", height: 7.5 }, "agent").project;
   assertOperationRejectedWithoutMutation(tall, { type: "set_floor_height", floorId: "floor-ground", height: 7 }, /Wardrobe on this floor is 7\.5 ft tall and would not fit a 7 ft storey\. Resize or remove it first\./);
   assert.equal(applyOperation(tall, { type: "set_floor_height", floorId: "floor-ground", height: 8 }, "agent").project.floors[0].height, 8);
+}
+
+{
+  const { base, roomId } = furnitureFixture();
+  const furnished = applyOperation(base, { type: "add_furniture", roomId, kind: "double-bed" }, "agent").project;
+  const codes = (project: Project) => validateLayout(project).issues.map((issue) => issue.code);
+  assert.ok(!codes(furnished).some((code) => code.startsWith("FURNITURE_")), "a furnished project made through operations has no furniture issues");
+
+  // Hand-edited: sticks out of the room.
+  const outside = cloneProject(furnished);
+  outside.furniture[0].x = 11;
+  assert.ok(codes(outside).includes("FURNITURE_OUTSIDE_ROOM"));
+
+  // Hand-edited: duplicate on top of the bed.
+  const overlapping = cloneProject(furnished);
+  overlapping.furniture.push({ ...overlapping.furniture[0], id: "furniture-copy", name: "Copy" });
+  const overlapIssue = validateLayout(overlapping).issues.find((issue) => issue.code === "FURNITURE_OVERLAP");
+  assert.ok(overlapIssue, "overlapping furniture is reported");
+  assert.deepEqual(overlapIssue!.elementIds.sort(), [furnished.furniture[0].id, "furniture-copy"].sort());
+
+  // Review focus 5: a missing room is an issue, not an exception.
+  const orphan = cloneProject(furnished);
+  orphan.furniture[0].roomId = "room-ghost";
+  assert.ok(codes(orphan).includes("FURNITURE_OUTSIDE_ROOM"));
+
+  // Floor-scoped validation only looks at that floor's furniture.
+  assert.equal(validateLayout(outside, "floor-missing").issues.filter((issue) => issue.code.startsWith("FURNITURE_")).length, 0);
+
+  // Inspection payloads.
+  const summary = inspectFloor(furnished, "floor-ground", "summary") as { furniture: Array<Record<string, unknown>> };
+  assert.deepEqual(Object.keys(summary.furniture[0]).sort(), ["height", "id", "kind", "length", "name", "roomId", "rotation", "width", "x", "y"]);
+  const full = inspectFloor(furnished, "floor-ground", "full") as { furniture: Array<{ footprint: { w: number; l: number } | null }> };
+  assert.equal(full.furniture[0].footprint?.w, 5);
+  const overview = projectInspection(furnished);
+  assert.equal(overview.counts.furniture, 1);
+  assert.equal(overview.furniture.length, 1);
 }
 
 console.log(JSON.stringify({

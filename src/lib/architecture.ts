@@ -353,7 +353,9 @@ export type ValidationIssue = {
     | "BEDROOM_NO_EGRESS"
     | "INVALID_BALCONY"
     | "INVALID_SITE_BOUNDARY"
-    | "INVALID_FACADE_FEATURE";
+    | "INVALID_FACADE_FEATURE"
+    | "FURNITURE_OUTSIDE_ROOM"
+    | "FURNITURE_OVERLAP";
   severity: "error" | "warning";
   message: string;
   elementIds: string[];
@@ -3556,6 +3558,43 @@ export function validateLayout(project: Project, floorId?: string): ValidationRe
     });
   }
 
+  const targetFurniture = project.furniture.filter((item) => targetFloors.includes(item.floorId));
+  for (const item of targetFurniture) {
+    const host = project.rooms.find((room) => room.id === item.roomId);
+    const fits = host !== undefined
+      && host.floorId === item.floorId
+      && footprintFitsPolygon(roomVertices(host), furnitureFootprint(item, { x: host.x, y: host.y }));
+    if (fits) continue;
+    issues.push({
+      id: createId("issue"), code: "FURNITURE_OUTSIDE_ROOM", severity: "error",
+      message: `${item.name} is not fully inside ${host ? host.name : "an existing room"}.`,
+      elementIds: [item.id],
+      evidence: { x: item.x, y: item.y, width: item.width, length: item.length, rotation: item.rotation },
+      suggestion: "Move or resize the furniture so its whole footprint sits inside its room.",
+      ...(host ? { affectedRoomIds: [host.id] } : {}),
+    });
+  }
+  const placedFurniture = targetFurniture.flatMap((item) => {
+    const host = project.rooms.find((room) => room.id === item.roomId);
+    return host ? [{ item, rect: furnitureFootprint(item, { x: host.x, y: host.y }) }] : [];
+  });
+  for (let first = 0; first < placedFurniture.length; first += 1) {
+    for (let second = first + 1; second < placedFurniture.length; second += 1) {
+      const a = placedFurniture[first];
+      const b = placedFurniture[second];
+      if (a.item.floorId !== b.item.floorId) continue;
+      const area = rectOverlapArea(a.rect, b.rect);
+      if (area <= FURNITURE_OVERLAP_TOLERANCE) continue;
+      issues.push({
+        id: createId("issue"), code: "FURNITURE_OVERLAP", severity: "error",
+        message: `${a.item.name} overlaps ${b.item.name} by ${round(area)} sq ft.`,
+        elementIds: [a.item.id, b.item.id],
+        evidence: { overlapSqFt: round(area) },
+        suggestion: "Move one of the pieces so they only touch.",
+      });
+    }
+  }
+
   const errors = issues.filter((issue) => issue.severity === "error").length;
   const warnings = issues.length - errors;
   return {
@@ -3662,6 +3701,7 @@ export function inspectFloor(project: Project, floorId: string, detail: "summary
   const walls = project.walls.filter((wall) => wall.floorId === floorId);
   const openings = project.openings.filter((opening) => opening.floorId === floorId);
   const balconies = project.balconies.filter((balcony) => balcony.floorId === floorId);
+  const furniture = project.furniture.filter((item) => item.floorId === floorId);
   const facadeFeatures = project.facadeFeatures.filter((feature) => project.walls.find((wall) => wall.id === feature.wallId)?.floorId === floorId);
   const circulation = buildCirculationGraph(project);
   const validation = validateLayout(project, floorId);
@@ -3677,6 +3717,10 @@ export function inspectFloor(project: Project, floorId: string, detail: "summary
       stairs: project.stairs.filter((stair) => stair.floorId === floorId),
       stairDetails,
       balconies,
+      furniture: furniture.map((item) => {
+        const host = project.rooms.find((room) => room.id === item.roomId);
+        return { ...item, footprint: host ? furnitureFootprint(item, { x: host.x, y: host.y }) : null };
+      }),
       facadeFeatures,
       metrics,
       circulation,
@@ -3718,6 +3762,10 @@ export function inspectFloor(project: Project, floorId: string, detail: "summary
       riserHeightInches: item.connection.riserHeightInches, treadDepthInches: item.connection.treadDepthInches,
     })),
     balconies: balconies.map((balcony) => ({ id: balcony.id, name: balcony.name, kind: balcony.kind, x: balcony.x, y: balcony.y, width: balcony.width, length: balcony.length })),
+    furniture: furniture.map((item) => ({
+      id: item.id, roomId: item.roomId, kind: item.kind, name: item.name,
+      x: item.x, y: item.y, width: item.width, length: item.length, height: item.height, rotation: item.rotation,
+    })),
     facadeFeatures: facadeFeatures.map((feature) => ({ id: feature.id, kind: feature.kind, wallId: feature.wallId, offset: feature.offset, width: feature.width })),
     metrics,
     circulation: {
@@ -3810,6 +3858,10 @@ export function projectInspection(project: Project) {
     roof: project.roof,
     siteBoundary: project.siteBoundary,
     balconies: project.balconies.map((balcony) => ({ id: balcony.id, floorId: balcony.floorId, name: balcony.name, kind: balcony.kind, x: balcony.x, y: balcony.y, width: balcony.width, length: balcony.length })),
+    furniture: project.furniture.map((item) => ({
+      id: item.id, floorId: item.floorId, roomId: item.roomId, kind: item.kind, name: item.name,
+      x: item.x, y: item.y, width: item.width, length: item.length, height: item.height, rotation: item.rotation,
+    })),
     facadeFeatures: project.facadeFeatures.map((feature) => ({ id: feature.id, kind: feature.kind, wallId: feature.wallId, offset: feature.offset, width: feature.width })),
     floors: project.floors,
     counts: {
@@ -3822,6 +3874,7 @@ export function projectInspection(project: Project) {
       balconies: project.balconies.filter((item) => item.kind === "balcony").length,
       terraces: project.balconies.filter((item) => item.kind === "terrace").length,
       facadeFeatures: project.facadeFeatures.length,
+      furniture: project.furniture.length,
     },
     metrics: projectMetrics(project),
     currentView: project.view,
