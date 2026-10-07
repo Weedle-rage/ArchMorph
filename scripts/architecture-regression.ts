@@ -927,6 +927,54 @@ const furnitureFixture = () => {
   assert.equal(applyOperation(u, { type: "add_furniture", roomId: uId, kind: "sofa", x: 0, y: 0 }, "agent").project.furniture.length, 1);
 }
 
+{
+  const { base, roomId } = furnitureFixture();
+  const furnished = applyOperation(
+    applyOperation(base, { type: "add_furniture", roomId, kind: "double-bed", x: 2, y: 2 }, "agent").project,
+    { type: "add_furniture", roomId, kind: "wardrobe", x: 8, y: 0 },
+    "agent",
+  ).project;
+
+  // move_room carries furniture: offsets stay relative, absolute positions follow the room.
+  const movedRoom = applyOperation(furnished, { type: "move_room", roomId, x: 8, y: 14 }, "agent").project;
+  const movedHost = movedRoom.rooms[0];
+  assert.notEqual(movedHost.x, furnished.rooms[0].x, "the room moved");
+  assert.deepEqual([movedRoom.furniture[0].x, movedRoom.furniture[0].y], [2, 2], "relative offsets are unchanged");
+  assert.equal(furnitureFootprint(movedRoom.furniture[0], movedHost).x, movedHost.x + 2);
+
+  // resize_room is rejected when an item would no longer fit, and named in the error.
+  assertOperationRejectedWithoutMutation(furnished, { type: "resize_room", roomId, width: 11, length: 12 }, /Wardrobe would no longer fit\. Move or remove it first\./);
+  const widened = applyOperation(furnished, { type: "resize_room", roomId, width: 13, length: 12 }, "agent").project;
+  assert.equal(widened.furniture.length, 2);
+
+  // update_room_vertices: the origin moves, absolute positions are preserved by rebasing offsets.
+  const reshaped = applyOperation(
+    furnished,
+    { type: "update_room_vertices", roomId, vertices: [{ x: 4, y: 11 }, { x: 17, y: 11 }, { x: 17, y: 24 }, { x: 4, y: 24 }] },
+    "agent",
+  ).project;
+  assert.deepEqual([reshaped.rooms[0].x, reshaped.rooms[0].y], [4, 11]);
+  const before = furnitureFootprint(furnished.furniture[0], furnished.rooms[0]);
+  const after = furnitureFootprint(reshaped.furniture[0], reshaped.rooms[0]);
+  assert.deepEqual([after.x, after.y], [before.x, before.y], "the bed keeps its absolute plan position");
+  assertOperationRejectedWithoutMutation(
+    furnished,
+    { type: "update_room_vertices", roomId, vertices: [{ x: 5, y: 12 }, { x: 9, y: 12 }, { x: 9, y: 24 }, { x: 5, y: 24 }] },
+    /would no longer fit/,
+  );
+
+  // delete_room removes its furniture in the same transaction, i.e. one undo step.
+  const deleted = applyOperation(furnished, { type: "delete_room", roomId }, "agent");
+  assert.equal(deleted.project.furniture.length, 0);
+  assert.equal(deleted.project.version, furnished.version + 1, "one operation, one history entry");
+  assert.equal(furnished.furniture.length, 2, "the previous snapshot still has the furniture, so undo restores both");
+
+  // set_floor_height: items taller than the new storey block the change.
+  const tall = applyOperation(base, { type: "add_furniture", roomId, kind: "wardrobe", height: 7.5 }, "agent").project;
+  assertOperationRejectedWithoutMutation(tall, { type: "set_floor_height", floorId: "floor-ground", height: 7 }, /Wardrobe on this floor is 7\.5 ft tall and would not fit a 7 ft storey\. Resize or remove it first\./);
+  assert.equal(applyOperation(tall, { type: "set_floor_height", floorId: "floor-ground", height: 8 }, "agent").project.floors[0].height, 8);
+}
+
 console.log(JSON.stringify({
   project: { id: project.id, schemaVersion: project.schemaVersion, rooms: project.rooms.length, walls: project.walls.length, openings: project.openings.length },
   topology: { sharedWalls: project.walls.filter((wall) => wall.roomIds.length === 2).length, duplicateWallIds: project.walls.length - new Set(project.walls.map((wall) => wall.id)).size },

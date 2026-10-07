@@ -2361,6 +2361,7 @@ export function applyOperation(
       assertRoomInsidePlot(project, room);
       // A resize states an exact dimension, so it is never snapped — but it still cannot overlap.
       assertNoRoomOverlap(project, room, previousRoom.id);
+      assertFurnitureFitsRoom(room, project.furniture.filter((item) => item.roomId === room.id));
       const targets = roomOpeningTargets(project, previousRoom, room);
       const featureTargets = roomFacadeFeatureTargets(project, previousRoom, room);
       const wallFinishes = roomWallFinishes(project, previousRoom.id);
@@ -2381,6 +2382,14 @@ export function applyOperation(
       assertRoomVertices(project, normalized);
       const room = roomFromVertices(previousRoom, normalized);
       assertNoRoomOverlap(project, room, previousRoom.id);
+      // The bounding-box origin can move; rebase offsets so each item keeps its absolute plan position.
+      const shiftX = previousRoom.x - room.x;
+      const shiftY = previousRoom.y - room.y;
+      const rebased = project.furniture.map((item) => (item.roomId === room.id
+        ? { ...item, x: round(item.x + shiftX), y: round(item.y + shiftY) }
+        : item));
+      assertFurnitureFitsRoom(room, rebased.filter((item) => item.roomId === room.id));
+      project.furniture = rebased;
       project.rooms[index] = room;
       rebuildCanonicalTopology(project);
       assertAllOpeningsValid(project);
@@ -2409,6 +2418,9 @@ export function applyOperation(
       if (!room) throw new Error(`Room ${operation.roomId} does not exist.`);
       const roomWallIds = new Set(project.walls.filter((wall) => wall.roomIds.length === 1 && wall.roomIds[0] === room.id).map((wall) => wall.id));
       project.rooms = project.rooms.filter((item) => item.id !== room.id);
+      const roomFurnitureIds = new Set(project.furniture.filter((item) => item.roomId === room.id).map((item) => item.id));
+      project.furniture = project.furniture.filter((item) => item.roomId !== room.id);
+      if (project.view.focusElementId && roomFurnitureIds.has(project.view.focusElementId)) project.view.focusElementId = undefined;
       project.openings = project.openings.filter((opening) => !roomWallIds.has(opening.wallId));
       project.facadeFeatures = project.facadeFeatures.filter((feature) => !roomWallIds.has(feature.wallId));
       rebuildCanonicalTopology(project);
@@ -2883,6 +2895,10 @@ export function applyOperation(
         && (opening.sillHeight ?? 0) + opening.height > height + 0.001);
       if (blocking) {
         throw new Error(`A ${blocking.kind} on this floor reaches ${round((blocking.sillHeight ?? 0) + blocking.height, 2)} ft and would not fit a ${height} ft storey. Resize or lower it first.`);
+      }
+      const tallFurniture = project.furniture.find((item) => item.floorId === operation.floorId && item.height > height + 0.001);
+      if (tallFurniture) {
+        throw new Error(`A ${tallFurniture.name} on this floor is ${round(tallFurniture.height, 2)} ft tall and would not fit a ${height} ft storey. Resize or remove it first.`);
       }
       project.floors[index] = { ...project.floors[index], height };
       // Every storey above sits on the one below, so elevations and stair rises recompute together.
