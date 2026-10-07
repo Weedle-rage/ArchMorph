@@ -11,6 +11,7 @@ import {
   fromDisplayLength,
   isUnitSystem,
   lengthUnitLabel,
+  localizeMessage,
   parseLength,
   toDisplayArea,
   toDisplayLength,
@@ -100,4 +101,24 @@ for (const text of ["", "   ", "abc", "12..5", "1,5", "3m 4ft", "NaN", "Infinity
   assert.ok((parsed as { reason: string }).reason.length > 0, `"${text}" should explain why`);
 }
 
-console.log("Units regression passed: conversion, formatting and parsing.");
+{
+  // Imperial text is returned untouched.
+  const samples = ["A wall must be at least 1 ft long.", "Storey height must be between 7 and 16 ft.", "no quantity here"];
+  for (const sample of samples) assert.equal(localizeMessage(sample, "ft"), sample);
+
+  // Metric rewrites every shape the reducer produces today.
+  assert.equal(localizeMessage("A wall must be at least 1 ft long.", "m"), "A wall must be at least 0.3 m long.");
+  assert.equal(localizeMessage("Storey height must be between 7 and 16 ft.", "m"), "Storey height must be between 2.13 and 4.88 m.");
+  assert.equal(localizeMessage("Furniture height must be between 0.25 and 8 ft.", "m"), "Furniture height must be between 0.08 and 2.44 m.");
+  assert.equal(localizeMessage("Rooms must be at least 3 × 3 ft.", "m"), "Rooms must be at least 0.91 × 0.91 m.");
+  assert.equal(localizeMessage("Editable 30 × 60 ft residential site created", "m"), "Editable 9.14 × 18.29 m residential site created");
+  assert.equal(localizeMessage("Wardrobe is 7.5 ft tall and would not fit the 7 ft storey.", "m"), "Wardrobe is 2.29 m tall and would not fit the 2.13 m storey.");
+  assert.equal(localizeMessage("Double Bed would overlap Wardrobe by 6.5 sq ft.", "m"), "Double Bed would overlap Wardrobe by 0.6 m².");
+  assert.equal(localizeMessage("at least 12 sq ft clear, 20 in wide, 24 in high", "m"), "at least 1.11 m² clear, 20 in wide, 24 in high", "inches are left alone");
+  assert.equal(localizeMessage("Front wall 11.5′ · Door 3′", "m"), "Front wall 3.51 m · Door 0.91 m");
+  assert.equal(localizeMessage("Room room-1 does not exist.", "m"), "Room room-1 does not exist.");
+  assert.equal(localizeMessage("A 5 storey tower", "m"), "A 5 storey tower", "a bare number is not a length");
+  assert.ok(!/\bft\b|sq ft|′/.test(localizeMessage("Gate width must leave at least 0.5 ft of wall at both sides.", "m")));
+}
+
+console.log("Units regression passed: conversion, formatting, parsing and message rewriting.");

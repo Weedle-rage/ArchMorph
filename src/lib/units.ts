@@ -111,3 +111,15 @@ export function parseLength(text: string, unit: UnitSystem): ParsedLength {
   if (feet > MAX_FEET) return { ok: false, reason: `That length is too large. Use at most ${MAX_FEET} ft.` };
   return { ok: true, feet: round2(negative ? -feet : feet) };
 }
+
+const AREA_QUANTITY = /(\d+(?:\.\d+)?)\s*sq ft/g;
+// "3 ft", "3 × 3 ft", "7 and 16 ft", "3 to 5 ft", "3′": every number in the run is a length in feet.
+const LENGTH_QUANTITY = /(\d+(?:\.\d+)?(?:\s*(?:×|and|to)\s*\d+(?:\.\d+)?)*)\s*(?:ft|′)(?![\w²])/g;
+
+/** Rewrite the feet quantities in a reducer or validation message for a metric project. */
+export function localizeMessage(text: string, unit: UnitSystem): string {
+  if (unit !== "m") return text;
+  return text
+    .replace(AREA_QUANTITY, (_match, value: string) => `${trimmed(Number(value) * SQM_PER_SQFT, 2)} m²`)
+    .replace(LENGTH_QUANTITY, (_match, run: string) => `${run.replace(/\d+(?:\.\d+)?/g, (value) => trimmed(Number(value) * METRES_PER_FOOT, 2))} m`);
+}
