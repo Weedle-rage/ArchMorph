@@ -98,13 +98,14 @@ import {
 import { furnitureCatalog, furnitureKinds, type FurnitureKind } from "@/lib/furniture";
 import {
   areaUnitLabel,
+  boundLength,
   formatArea,
   formatAreaValue,
   formatLength,
   formatLengthValue,
   lengthUnitLabel,
   localizeMessage,
-  parseLength,
+  resolveLengthEdit,
   type UnitSystem,
 } from "@/lib/units";
 import { UnitContext } from "./UnitContext";
@@ -417,14 +418,17 @@ function NumberField({
   const [error, setError] = useState<string>();
   // Without a unit prop the field is a length in feet; with one ("" or "IP") it is a plain number.
   const isLength = unit === undefined;
-  const shown = (feet: number) => (isLength ? Number(formatLengthValue(feet, system)) : feet);
+  const shownText = isLength ? formatLengthValue(value, system) : String(value);
   const tag = isLength ? lengthUnitLabel(system) : unit;
-  const range = min !== undefined && max !== undefined
-    ? `Enter a value from ${shown(min)} to ${shown(max)}.`
-    : min !== undefined
-      ? `Enter ${shown(min)} or more.`
-      : max !== undefined
-        ? `Enter ${shown(max)} or less.`
+  // Quoted bounds round inward (minimum up, maximum down) so the value a person reads is itself accepted.
+  const lowShown = min === undefined ? undefined : isLength ? boundLength(min, system, "up") : min;
+  const highShown = max === undefined ? undefined : isLength ? boundLength(max, system, "down") : max;
+  const range = lowShown !== undefined && highShown !== undefined
+    ? `Enter a value from ${lowShown} to ${highShown}.`
+    : lowShown !== undefined
+      ? `Enter ${lowShown} or more.`
+      : highShown !== undefined
+        ? `Enter ${highShown} or less.`
         : "Enter a valid number.";
   return (
     <label className="field">
@@ -434,7 +438,7 @@ function NumberField({
           key={`${value}:${system}`}
           type={isLength ? "text" : "number"}
           inputMode="decimal"
-          defaultValue={shown(value)}
+          defaultValue={shownText}
           min={isLength ? undefined : min}
           max={isLength ? undefined : max}
           step={isLength ? undefined : step}
@@ -445,14 +449,17 @@ function NumberField({
             let next = Number(event.currentTarget.value);
             if (isLength) {
               // Typed feet-inches and metric suffixes are accepted in either mode; the result is stored feet.
-              const parsed = parseLength(event.currentTarget.value, system);
-              next = parsed.ok ? parsed.feet : Number.NaN;
-            }
+              // Text identical to what the field showed is not an edit: the shown metric text is rounded to 0.01 m,
+              // so re-parsing it would silently move the geometry.
+              const edit = resolveLengthEdit(event.currentTarget.value, shownText, system);
+              if (edit.kind === "unchanged") return;
+              next = edit.kind === "valid" ? edit.feet : Number.NaN;
+            } else if (event.currentTarget.value.trim() === shownText) return;
             const valid = Number.isFinite(next) && (min === undefined || next >= min) && (max === undefined || next <= max);
             if (valid && next !== value) onCommit(next);
             if (!valid) {
               setError(range);
-              event.currentTarget.value = String(shown(value));
+              event.currentTarget.value = shownText;
             }
           }}
           onKeyDown={(event) => {

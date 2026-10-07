@@ -20,13 +20,19 @@ export const LENGTH_KEYS: ReadonlySet<string> = new Set([
   "gateWidth", "gateOffset", "gateHeight", "frontSetback", "rearSetback", "leftSetback", "rightSetback",
   "front", "rear", "left", "right", "perimeter", "wallLength", "rise", "riserHeight", "treadDepth", "recommendedRun",
   "recommendedRuns", "treadDepths", "distance", "horizontal", "vertical", "u", "v",
+  // Validation evidence and alignment results.
+  "minDimension", "requiredMinDimension", "requiredDepth", "requiredClearDepth", "wallHeight", "overlapLength", "plotWidth", "toleranceFt",
 ]);
+
+/** String values that carry feet numbers (joined lists, coordinate pairs, JSON): every number in them is converted. */
+export const STRING_LENGTH_KEYS: ReadonlySet<string> = new Set(["actualRuns", "recommendedRuns", "doorCentre", "accessPolygon"]);
 
 export const AREA_KEYS: ReadonlySet<string> = new Set([
   "area", "balconyArea", "carpetArea", "floorCoveredArea", "grossCoveredArea", "netRoomArea", "netRoomAreaTotal",
   "openArea", "openSiteArea", "plotArea", "projectBalconyArea", "projectTerraceArea", "roomAreaSum", "terraceArea",
   "totalCarpetArea", "totalConstructedArea", "totalGrossCoveredArea", "totalNetBuildingArea", "totalNetFloorArea",
   "overlapSqFt", "glazedArea", "openableArea", "requiredClearArea", "requiredGlazing", "requiredOpenable", "roomArea",
+  "requiredArea", "overlapArea",
 ]);
 
 /** Numeric keys that are counts, ratios, angles, inches or thermal values: never converted. */
@@ -37,7 +43,8 @@ export const UNITLESS_KEYS: ReadonlySet<string> = new Set([
   "schemaVersion", "solarHeatGainCoefficient", "stairs", "terraces", "treadCount", "treadDepthInches", "uFactor",
   "version", "visibleTransmittance", "walls", "warnings", "windows",
   "doorCount", "exteriorDoorCount", "windowCount", "glazingRatioPercent", "maxSillInches", "minClearHeightInches",
-  "minClearWidthInches", "progress", "progressStart", "progressEnd",
+  "minClearWidthInches", "progress", "progressStart", "progressEnd", "disconnectedRoomCount",
+  "risersPerFlight", "treadsPerFlight",
 ]);
 
 /** Keys that are a length only for one tool (the generic name is ambiguous elsewhere). */
@@ -66,6 +73,9 @@ export function convertInput(value: unknown, unit: UnitSystem, extraLengthKeys: 
 }
 
 const SKIPPED_TEXT_KEYS = new Set(["name", "label", "title"]);
+const DATA_TEXT_KEYS = new Set(["imageDataUrl", "dataUrl", "content"]);
+/** Messages are short sentences; anything longer is treated as data. */
+const MAX_MESSAGE_LENGTH = 2000;
 
 /** Tool results come from the model in feet; convert to the project's unit. Identity for feet. */
 export function convertOutput(value: unknown, unit: UnitSystem, extraLengthKeys: ReadonlySet<string> = new Set(), key = ""): unknown {
@@ -78,6 +88,9 @@ export function convertOutput(value: unknown, unit: UnitSystem, extraLengthKeys:
   if (typeof value === "string") {
     if (key === "unit") return value === "ft" ? lengthUnitLabel(unit) : value === "sq ft" ? areaUnitLabel(unit) : value;
     if (SKIPPED_TEXT_KEYS.has(key) || key === "id" || key.endsWith("Id") || key.endsWith("Ids")) return value;
+    if (STRING_LENGTH_KEYS.has(key)) return value.replace(/\d+(?:\.\d+)?/g, (number) => String(round2(toDisplayLength(Number(number), unit))));
+    // Data payloads (base64 images, exported documents) are never rewritten: base64 contains runs like "9ft+".
+    if (DATA_TEXT_KEYS.has(key) || value.length > MAX_MESSAGE_LENGTH) return value;
     return localizeMessage(value, unit);
   }
   if (Array.isArray(value)) return value.map((item) => convertOutput(item, unit, extraLengthKeys, key));
@@ -108,8 +121,10 @@ function describeSchema(node: unknown, extraLengthKeys: ReadonlySet<string>): un
         const next = describeSchema(definition, extraLengthKeys) as Record<string, unknown>;
         if (LENGTH_KEYS.has(name) || AREA_KEYS.has(name) || extraLengthKeys.has(name)) {
           // Bounds written in feet would reject valid metric values; the operation enforces the real limits.
+          // Feet-valued defaults are wrong in a metric project for the same reason.
           delete next.minimum;
           delete next.maximum;
+          delete next.default;
         }
         properties[name] = next;
       }

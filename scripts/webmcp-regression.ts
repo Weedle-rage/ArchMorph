@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { furnitureKinds } from "../src/lib/furniture.ts";
-import { isClassifiedKey, TOOL_LENGTH_KEYS } from "../src/lib/webmcp-units.ts";
+import { convertOutput, isClassifiedKey, TOOL_LENGTH_KEYS } from "../src/lib/webmcp-units.ts";
 import {
   applyOperation,
   cloneProject,
@@ -443,8 +443,13 @@ assert.equal(exported.projectVersion, project.version, "exports should identify 
   // Errors are localised for the agent.
   await assert.rejects(
     async () => toolByName("set_floor_height").execute({ floorId: project.view.activeFloorId, height: 1 }),
-    /between 2\.13 and 4\.88 m/,
+    /between 2\.14 and 4\.87 m/,
   );
+  // Final review, Important 4: the bounds quoted in the error are themselves accepted.
+  await toolByName("set_floor_height").execute({ floorId: project.view.activeFloorId, height: 2.14 });
+  assert.equal(project.floors[0].height, 7.02, "the quoted lower bound is accepted");
+  await toolByName("set_floor_height").execute({ floorId: project.view.activeFloorId, height: 4.87 });
+  assert.equal(project.floors[0].height, 15.98, "the quoted upper bound is accepted");
 
   // Review focus 4: schemas carry no feet-valued bounds on lengths, and descriptions name project units.
   const roomSchema = toolByName("create_room").inputSchema as { properties: Record<string, Record<string, unknown>> };
@@ -455,11 +460,42 @@ assert.equal(exported.projectVersion, project.version, "exports should identify 
   await toolByName("create_room").execute({ floorId: project.view.activeFloorId, name: "Small", roomType: "Bedroom", x: 1.8288, y: 8.5344, width: 2.5, length: 3.2 });
   assert.equal(project.rooms[project.rooms.length - 1].width, 8.2, "2.5 m is 8.2 ft");
 
+  // Final review, Important 5: feet-valued defaults are dropped too, so an advertised default cannot be a wrong-unit value.
+  const doorSchema = toolByName("add_door").inputSchema as { properties: Record<string, Record<string, unknown>> };
+  for (const [name, definition] of Object.entries(doorSchema.properties)) {
+    if (["width", "height", "offset", "sillHeight"].includes(name)) assert.equal(definition.default, undefined, `add_door.${name} must not advertise a feet default`);
+  }
+
+  // Final review, Critical 2: long data strings are never rewritten (base64 contains runs like "9ft+").
+  const snapshotLike = convertOutput({ imageDataUrl: "data:image/png;base64,AAA9ft+BBB3ft/CC", content: "<svg>9 ft 3\u2032</svg>", message: "at least 3 ft" }, "m") as Record<string, string>;
+  assert.equal(snapshotLike.imageDataUrl, "data:image/png;base64,AAA9ft+BBB3ft/CC");
+  assert.equal(snapshotLike.content, "<svg>9 ft 3\u2032</svg>");
+  assert.equal(snapshotLike.message, "at least 0.92 m", "message text is still localised");
+  const long = "x 9 ft ".repeat(1000);
+  assert.equal((convertOutput({ note: long }, "m") as { note: string }).note, long, "very long strings are treated as data");
+
+  // Final review, Critical 3: strings that carry feet values are converted number by number.
+  const stringy = convertOutput({ actualRuns: "6 / 8.5", recommendedRuns: "10", doorCentre: "5.5, 12", accessPolygon: '[{"x":5,"y":12}]' }, "m") as Record<string, string>;
+  assert.deepEqual(stringy, { actualRuns: "1.83 / 2.59", recommendedRuns: "3.05", doorCentre: "1.68, 3.66", accessPolygon: '[{"x":1.52,"y":3.66}]' });
+
   // Switching back restores feet.
   await toolByName("set_units").execute({ unit: "ft" });
   assert.equal(project.unit, "ft");
   const backInFeet = await toolByName("inspect_floor").execute({ floorId: project.view.activeFloorId, detail: "full" }) as { rooms: Array<{ width: number }> };
   assert.equal(backInFeet.rooms[0].width, 12);
+
+  // Final review, Critical 3: validation evidence next to the (already localised) message is converted too.
+  project = createInitialProject();
+  await toolByName("set_units").execute({ unit: "m" });
+  await toolByName("create_room").execute({ floorId: project.view.activeFloorId, name: "Tiny", roomType: "Bedroom", x: 1.524, y: 3.6576, width: 0.92, length: 0.92 });
+  const report = await toolByName("validate_layout").execute({}) as { issues: Array<{ code: string; evidence: Record<string, number> }> };
+  const tiny = report.issues.find((issue) => issue.code === "ROOM_BELOW_HABITABLE_MINIMUM");
+  assert.ok(tiny, "a 3 ft bedroom is below the habitable minimum");
+  assert.equal(tiny!.evidence.minDimension, 0.92);
+  assert.equal(tiny!.evidence.requiredMinDimension, 2.13, "7 ft is 2.13 m");
+  assert.equal(tiny!.evidence.requiredArea, 6.5, "70 sq ft is 6.5 m²");
+  assert.equal(tiny!.evidence.area, 0.85, "a 9.12 sq ft room is 0.85 m²");
+  await toolByName("set_units").execute({ unit: "ft" });
 
   // Review focus 3: every numeric key a tool accepts or returns is classified as length, area or unitless.
   const sweep = migrateProject(JSON.parse(fs.readFileSync("fixtures/aurora-house-30x95.archmorph.json", "utf8")).project as Project);
@@ -473,6 +509,7 @@ assert.equal(exported.projectVersion, project.version, "exports should identify 
     if (!value || typeof value !== "object") return;
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
       if (typeof child === "number" && !isClassifiedKey(key, toolName)) unclassified.add(`${where}:${toolName}.${key}`);
+      else if (Array.isArray(child) && child.some((item) => typeof item === "number") && !isClassifiedKey(key, toolName)) unclassified.add(`${where}:${toolName}.${key}[]`);
       else collect(child, toolName, where);
     }
   };

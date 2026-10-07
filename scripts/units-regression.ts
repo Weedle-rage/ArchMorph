@@ -11,8 +11,10 @@ import {
   fromDisplayLength,
   isUnitSystem,
   lengthUnitLabel,
+  boundLength,
   localizeMessage,
   parseLength,
+  resolveLengthEdit,
   toDisplayArea,
   toDisplayLength,
 } from "../src/lib/units.ts";
@@ -107,18 +109,47 @@ for (const text of ["", "   ", "abc", "12..5", "1,5", "3m 4ft", "NaN", "Infinity
   for (const sample of samples) assert.equal(localizeMessage(sample, "ft"), sample);
 
   // Metric rewrites every shape the reducer produces today.
-  assert.equal(localizeMessage("A wall must be at least 1 ft long.", "m"), "A wall must be at least 0.3 m long.");
-  assert.equal(localizeMessage("Storey height must be between 7 and 16 ft.", "m"), "Storey height must be between 2.13 and 4.88 m.");
-  assert.equal(localizeMessage("Furniture height must be between 0.25 and 8 ft.", "m"), "Furniture height must be between 0.08 and 2.44 m.");
-  assert.equal(localizeMessage("Rooms must be at least 3 × 3 ft.", "m"), "Rooms must be at least 0.91 × 0.91 m.");
+  assert.equal(localizeMessage("A wall must be at least 1 ft long.", "m"), "A wall must be at least 0.31 m long.");
+  assert.equal(localizeMessage("Storey height must be between 7 and 16 ft.", "m"), "Storey height must be between 2.14 and 4.87 m.");
+  assert.equal(localizeMessage("Furniture height must be between 0.25 and 8 ft.", "m"), "Furniture height must be between 0.08 and 2.43 m.");
+  assert.equal(localizeMessage("Rooms must be at least 3 × 3 ft.", "m"), "Rooms must be at least 0.92 × 0.92 m.");
   assert.equal(localizeMessage("Editable 30 × 60 ft residential site created", "m"), "Editable 9.14 × 18.29 m residential site created");
   assert.equal(localizeMessage("Wardrobe is 7.5 ft tall and would not fit the 7 ft storey.", "m"), "Wardrobe is 2.29 m tall and would not fit the 2.13 m storey.");
   assert.equal(localizeMessage("Double Bed would overlap Wardrobe by 6.5 sq ft.", "m"), "Double Bed would overlap Wardrobe by 0.6 m².");
-  assert.equal(localizeMessage("at least 12 sq ft clear, 20 in wide, 24 in high", "m"), "at least 1.11 m² clear, 20 in wide, 24 in high", "inches are left alone");
+  assert.equal(localizeMessage("at least 12 sq ft clear, 20 in wide, 24 in high", "m"), "at least 1.12 m² clear, 20 in wide, 24 in high", "inches are left alone");
   assert.equal(localizeMessage("Front wall 11.5′ · Door 3′", "m"), "Front wall 3.51 m · Door 0.91 m");
   assert.equal(localizeMessage("Room room-1 does not exist.", "m"), "Room room-1 does not exist.");
   assert.equal(localizeMessage("A 5 storey tower", "m"), "A 5 storey tower", "a bare number is not a length");
   assert.ok(!/\bft\b|sq ft|′/.test(localizeMessage("Gate width must leave at least 0.5 ft of wall at both sides.", "m")));
+}
+
+{
+  // Final review, Critical 1: focusing and leaving a length field is not an edit.
+  assert.deepEqual(resolveLengthEdit("2.74", "2.74", "m"), { kind: "unchanged" }, "an untouched metric field must not re-commit its rounded text");
+  assert.deepEqual(resolveLengthEdit(" 2.74 ", "2.74", "m"), { kind: "unchanged" });
+  assert.deepEqual(resolveLengthEdit("12.5", "12.5", "ft"), { kind: "unchanged" });
+  assert.deepEqual(resolveLengthEdit("2.75", "2.74", "m"), { kind: "valid", feet: 9.02 });
+  assert.deepEqual(resolveLengthEdit(`9'6"`, "2.74", "m"), { kind: "valid", feet: 9.5 });
+  assert.deepEqual(resolveLengthEdit("abc", "2.74", "m"), { kind: "invalid" });
+  assert.deepEqual(resolveLengthEdit("", "2.74", "m"), { kind: "invalid" });
+
+  // Final review, Important 4: a quoted lower bound rounds up and an upper bound rounds down, so the quoted value is itself accepted.
+  assert.equal(boundLength(3, "m", "up"), 0.92);
+  assert.equal(boundLength(7, "m", "up"), 2.14);
+  assert.equal(boundLength(16, "m", "down"), 4.87);
+  assert.equal(boundLength(12.5, "m", "up"), 3.81, "an exact value is not pushed up");
+  assert.equal(boundLength(12.5, "m", "down"), 3.81);
+  assert.equal(boundLength(3, "ft", "up"), 3);
+  for (let quarter = 1; quarter <= 800; quarter += 1) {
+    const feet = quarter / 4;
+    const up = boundLength(feet, "m", "up");
+    const down = boundLength(feet, "m", "down");
+    assert.ok(fromDisplayLength(up, "m") >= feet, `lower bound ${feet} ft shown as ${up} m must convert back to at least ${feet} ft`);
+    assert.ok(fromDisplayLength(down, "m") <= feet, `upper bound ${feet} ft shown as ${down} m must convert back to at most ${feet} ft`);
+  }
+  assert.equal(localizeMessage("Plot dimensions must be at least 15 ft.", "m"), "Plot dimensions must be at least 4.58 m.");
+  assert.equal(localizeMessage("Stair flights must be at most 8 ft wide.", "m"), "Stair flights must be at most 2.43 m wide.");
+  assert.equal(localizeMessage("Rooms must be at least 3 sq ft.", "m"), "Rooms must be at least 0.28 m².");
 }
 
 console.log("Units regression passed: conversion, formatting, parsing and message rewriting.");

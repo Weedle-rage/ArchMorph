@@ -112,14 +112,61 @@ export function parseLength(text: string, unit: UnitSystem): ParsedLength {
   return { ok: true, feet: round2(negative ? -feet : feet) };
 }
 
+type Direction = "up" | "down" | "nearest";
+
+/** Convert a feet quantity to metres (or m²) at two decimals, rounding the way a bound must be quoted. */
+function metricQuantity(value: number, factor: number, direction: Direction) {
+  const scaled = value * factor * 100;
+  const hundredths = direction === "up" ? Math.ceil(scaled - 1e-9) : direction === "down" ? Math.floor(scaled + 1e-9) : Math.round(scaled + 1e-9);
+  return trimmed(hundredths / 100, 2);
+}
+
+/**
+ * A bound shown in the project's unit. Lower bounds round up and upper bounds round down, so the value a person
+ * or agent reads back ("at least 0.92 m") is itself accepted rather than a hair under the feet limit.
+ */
+export function boundLength(feet: number, unit: UnitSystem, direction: "up" | "down"): number {
+  return unit === "m" ? Number(metricQuantity(feet, METRES_PER_FOOT, direction)) : feet;
+}
+
+export type LengthEdit = { kind: "unchanged" } | { kind: "valid"; feet: number } | { kind: "invalid" };
+
+/**
+ * What leaving a length field means. Text identical to what the field first showed is not an edit: the shown
+ * metric text is rounded to 0.01 m, so re-parsing it would silently move the geometry.
+ */
+export function resolveLengthEdit(text: string, original: string, unit: UnitSystem): LengthEdit {
+  if (text.trim() === original.trim()) return { kind: "unchanged" };
+  const parsed = parseLength(text, unit);
+  return parsed.ok ? { kind: "valid", feet: parsed.feet } : { kind: "invalid" };
+}
+
 const AREA_QUANTITY = /(\d+(?:\.\d+)?)\s*sq ft/g;
 // "3 ft", "3 × 3 ft", "7 and 16 ft", "3 to 5 ft", "3′": every number in the run is a length in feet.
 const LENGTH_QUANTITY = /(\d+(?:\.\d+)?(?:\s*(?:×|and|to)\s*\d+(?:\.\d+)?)*)\s*(?:ft|′)(?![\w²])/g;
+const LOWER_LEAD = /(?:at least|minimum of|no less than)\s*$/i;
+const UPPER_LEAD = /(?:at most|up to|no more than|maximum of)\s*$/i;
+
+function leadDirection(whole: string, offset: number): Direction {
+  const lead = whole.slice(Math.max(0, offset - 16), offset);
+  return LOWER_LEAD.test(lead) ? "up" : UPPER_LEAD.test(lead) ? "down" : "nearest";
+}
 
 /** Rewrite the feet quantities in a reducer or validation message for a metric project. */
 export function localizeMessage(text: string, unit: UnitSystem): string {
   if (unit !== "m") return text;
   return text
-    .replace(AREA_QUANTITY, (_match, value: string) => `${trimmed(Number(value) * SQM_PER_SQFT, 2)} m²`)
-    .replace(LENGTH_QUANTITY, (_match, run: string) => `${run.replace(/\d+(?:\.\d+)?/g, (value) => trimmed(Number(value) * METRES_PER_FOOT, 2))} m`);
+    .replace(AREA_QUANTITY, (_match, value: string, offset: number, whole: string) =>
+      `${metricQuantity(Number(value), SQM_PER_SQFT, leadDirection(whole, offset))} m²`)
+    .replace(LENGTH_QUANTITY, (_match, run: string, offset: number, whole: string) => {
+      const lead = leadDirection(whole, offset);
+      const isRange = /\b(?:and|to)\b/.test(run);
+      let position = 0;
+      const converted = run.replace(/\d+(?:\.\d+)?/g, (value) => {
+        const direction: Direction = lead !== "nearest" ? lead : isRange ? (position === 0 ? "up" : "down") : "nearest";
+        position += 1;
+        return metricQuantity(Number(value), METRES_PER_FOOT, direction);
+      });
+      return `${converted} m`;
+    });
 }
