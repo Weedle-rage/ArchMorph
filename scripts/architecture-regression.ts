@@ -31,6 +31,15 @@ import {
   type Project,
 } from "../src/lib/architecture.ts";
 import { buildSpatialModel, orientedSlopeFrame, type SpatialModel } from "../src/lib/spatial3d.ts";
+import {
+  FURNITURE_OVERLAP_TOLERANCE,
+  findFreeFurniturePosition,
+  footprintFitsPolygon,
+  furnitureCatalog,
+  furnitureFootprint,
+  furnitureKinds,
+  rectOverlapArea,
+} from "../src/lib/furniture.ts";
 
 const memory = new Map<string, string>();
 Object.assign(globalThis, {
@@ -739,6 +748,56 @@ assertOperationRejectedWithoutMutation(
   { type: "add_opening", kind: "door", wallId: screenWall.id, offset: 6 },
   /more than two rooms/,
 );
+
+{
+  assert.equal(furnitureKinds.length, 12, "the catalog should expose the twelve agreed kinds");
+  assert.deepEqual(
+    [furnitureCatalog["double-bed"].width, furnitureCatalog["double-bed"].length, furnitureCatalog["double-bed"].height],
+    [5, 6.67, 2],
+  );
+  const square = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }];
+  assert.deepEqual(furnitureFootprint({ x: 1, y: 2, width: 5, length: 3, rotation: 0 }, { x: 10, y: 20 }), { x: 11, y: 22, w: 5, l: 3 });
+  assert.deepEqual(furnitureFootprint({ x: 1, y: 2, width: 5, length: 3, rotation: 90 }, { x: 10, y: 20 }), { x: 11, y: 22, w: 3, l: 5 }, "90° swaps the footprint");
+  assert.deepEqual(furnitureFootprint({ x: 1, y: 2, width: 5, length: 3, rotation: 180 }, { x: 10, y: 20 }), { x: 11, y: 22, w: 5, l: 3 });
+  assert.deepEqual(furnitureFootprint({ x: 1, y: 2, width: 5, length: 3, rotation: 270 }, { x: 10, y: 20 }), { x: 11, y: 22, w: 3, l: 5 });
+
+  // Review focus 1: flush against walls and corners is inside.
+  assert.ok(footprintFitsPolygon(square, { x: 0, y: 0, w: 10, l: 10 }), "an item exactly filling the room is inside");
+  assert.ok(footprintFitsPolygon(square, { x: 6, y: 8, w: 4, l: 2 }), "an item in the corner is inside");
+  assert.ok(!footprintFitsPolygon(square, { x: 8, y: 0, w: 3, l: 2 }), "an item crossing a wall is outside");
+  assert.ok(!footprintFitsPolygon(square, { x: -0.5, y: 0, w: 2, l: 2 }), "an item left of the room is outside");
+
+  // Review focus 4: U-shaped room, 20 wide, 16 long, slot x 7..13 from y 7.2 down to 16.
+  const uShape = [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 16 }, { x: 13, y: 16 }, { x: 13, y: 7.2 }, { x: 7, y: 7.2 }, { x: 7, y: 16 }, { x: 0, y: 16 }];
+  assert.ok(footprintFitsPolygon(uShape, { x: 0, y: 0, w: 7, l: 16 }), "the whole left arm fits and may touch the slot edge");
+  assert.ok(footprintFitsPolygon(uShape, { x: 0, y: 0, w: 20, l: 7 }), "the solid top band fits");
+  assert.ok(!footprintFitsPolygon(uShape, { x: 6, y: 10, w: 7, l: 3 }), "an item in the slot is outside");
+  assert.ok(
+    !footprintFitsPolygon(uShape, { x: 1, y: 10, w: 12, l: 3 }),
+    "every corner and the centre lie on or inside the polygon, but the slot edge crosses the footprint",
+  );
+
+  assert.equal(rectOverlapArea({ x: 0, y: 0, w: 5, l: 5 }, { x: 5, y: 0, w: 2, l: 2 }), 0, "touching edges do not overlap");
+  assert.equal(rectOverlapArea({ x: 0, y: 0, w: 5, l: 5 }, { x: 3, y: 3, w: 4, l: 4 }), 4);
+  assert.equal(FURNITURE_OVERLAP_TOLERANCE, 0.01);
+
+  const blocked = [{ x: 0, y: 0, w: 5, l: 5 }];
+  assert.deepEqual(
+    findFreeFurniturePosition({ vertices: square, origin: { x: 0, y: 0 }, bounds: { width: 10, length: 10 }, item: { width: 5, length: 5, rotation: 0 }, others: [] }),
+    { x: 0, y: 0 },
+    "an empty room places at the top-left",
+  );
+  assert.deepEqual(
+    findFreeFurniturePosition({ vertices: square, origin: { x: 0, y: 0 }, bounds: { width: 10, length: 10 }, item: { width: 5, length: 5, rotation: 0 }, others: blocked }),
+    { x: 5, y: 0 },
+    "the scan goes row by row and skips occupied space",
+  );
+  assert.equal(
+    findFreeFurniturePosition({ vertices: square, origin: { x: 0, y: 0 }, bounds: { width: 10, length: 10 }, item: { width: 11, length: 2, rotation: 0 }, others: [] }),
+    undefined,
+    "an item larger than the room has no position",
+  );
+}
 
 console.log(JSON.stringify({
   project: { id: project.id, schemaVersion: project.schemaVersion, rooms: project.rooms.length, walls: project.walls.length, openings: project.openings.length },
