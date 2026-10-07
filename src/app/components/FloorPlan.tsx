@@ -25,6 +25,7 @@ import {
   wallLength,
 } from "@/lib/architecture";
 import { furnitureCatalog, furnitureFootprint } from "@/lib/furniture";
+import { formatArea, formatLength, formatLengthValue } from "@/lib/units";
 
 export type CanvasTool = "select" | "room" | "wall" | "door" | "window" | "stair" | "measure" | "balcony";
 
@@ -549,7 +550,7 @@ export default function FloorPlan({
         const visibleName = roomLabel(room).length > maximumCharacters ? `${roomLabel(room).slice(0, Math.max(4, maximumCharacters - 1))}…` : roomLabel(room);
         return (
           <g key={room.id} className={`room-group ${selected ? "is-selected" : ""}`}>
-            <title>{room.name} · {area} sq ft · {room.width} × {room.length} ft</title>
+            <title>{room.name} · {formatArea(area, project.unit)} · {formatLengthValue(room.width, project.unit)} × {formatLength(room.length, project.unit, { word: true })}</title>
             <polygon
               points={vertices.map((point) => `${point.x},${point.y}`).join(" ")}
               fill={room.color} fillOpacity={room.type === "Courtyard" ? 0.34 : 0.72}
@@ -561,7 +562,7 @@ export default function FloorPlan({
             />
             {(showLabels || selected) && <g pointerEvents="none" className="room-label">
               <text x={centroid.x} y={centroid.y + (compactLabel ? 0.3 : -0.35)} textAnchor="middle" className={`room-name ${compactLabel ? "is-compact" : ""}`}>{visibleName}</text>
-              {!compactLabel && <text x={centroid.x} y={centroid.y + 1.05} textAnchor="middle" className="room-area">{area} sq ft</text>}
+              {!compactLabel && <text x={centroid.x} y={centroid.y + 1.05} textAnchor="middle" className="room-area">{formatArea(area, project.unit)}</text>}
               {!compactLabel && !mediumLabel && <text x={room.x + room.width / 2} y={room.y + room.length - 0.65} textAnchor="middle" className="room-size">{room.width}&apos; × {room.length}&apos;</text>}
             </g>}
             {selected && (
@@ -622,7 +623,7 @@ export default function FloorPlan({
           const y1 = center.y - ty * feature.width / 2 + normal.y * projection;
           const x2 = center.x + tx * feature.width / 2 + normal.x * projection;
           const y2 = center.y + ty * feature.width / 2 + normal.y * projection;
-          return <line key={feature.id} x1={x1} y1={y1} x2={x2} y2={y2} stroke={selectedId === feature.id ? "#d65b32" : "#866d55"} strokeWidth={selectedId === feature.id ? 0.4 : Math.max(0.18, feature.thickness)} strokeLinecap="square" onPointerDown={(event) => { if (tool !== "select") return; event.stopPropagation(); onSelect(feature.id); }}><title>{feature.kind} · {feature.width} ft</title></line>;
+          return <line key={feature.id} x1={x1} y1={y1} x2={x2} y2={y2} stroke={selectedId === feature.id ? "#d65b32" : "#866d55"} strokeWidth={selectedId === feature.id ? 0.4 : Math.max(0.18, feature.thickness)} strokeLinecap="square" onPointerDown={(event) => { if (tool !== "select") return; event.stopPropagation(); onSelect(feature.id); }}><title>{feature.kind} · {formatLength(feature.width, project.unit, { word: true })}</title></line>;
         })}
       </g>
 
@@ -635,7 +636,7 @@ export default function FloorPlan({
           const selected = selectedId === item.id;
           const label = furnitureCatalog[item.kind]?.shortLabel ?? item.name;
           return <g key={item.id} className={`furniture-item ${selected ? "is-selected" : ""}`} onPointerDown={(event) => handleFurniturePointerDown(event, item)}>
-            <title>{item.name} · {item.width} × {item.length} ft</title>
+            <title>{item.name} · {formatLengthValue(item.width, project.unit)} × {formatLength(item.length, project.unit, { word: true })}</title>
             <rect x={rect.x} y={rect.y} width={rect.w} height={rect.l} fill="#e7dfd0" fillOpacity="0.85" stroke={selected ? "#d65b32" : "#8a7a64"} strokeWidth={selected ? 0.28 : 0.1} />
             {Math.min(rect.w, rect.l) >= 1.6 && <text x={rect.x + rect.w / 2} y={rect.y + rect.l / 2 + 0.22} textAnchor="middle" fontSize="0.6" fontWeight="700" fill="#5d5240" pointerEvents="none">{label}</text>}
           </g>;
@@ -655,7 +656,7 @@ export default function FloorPlan({
                 ? { x1: balcony.x, y1: balcony.y, x2: balcony.x, y2: balcony.y + balcony.length }
                 : { x1: balcony.x + balcony.width, y1: balcony.y, x2: balcony.x + balcony.width, y2: balcony.y + balcony.length };
           return <g key={balcony.id} className={`balcony ${selected ? "is-selected" : ""}`} onPointerDown={(event) => handleBalconyPointerDown(event, balcony)}>
-            <title>{balcony.name} · {balcony.width} × {balcony.length} ft</title>
+            <title>{balcony.name} · {formatLengthValue(balcony.width, project.unit)} × {formatLength(balcony.length, project.unit, { word: true })}</title>
             <rect x={balcony.x} y={balcony.y} width={balcony.width} height={balcony.length} fill="#c8c1b3" fillOpacity="0.38" stroke={selected ? "#d65b32" : "#786f63"} strokeWidth={selected ? 0.3 : 0.12} />
             {balcony.railing.enabled && balcony.railing.sides.map((side) => <line key={side} {...sideLine(side)} stroke="#52635b" strokeWidth="0.2" strokeDasharray={balcony.railing.style === "solid" ? undefined : "0.45 0.25"} />)}
             <text x={balcony.x + balcony.width / 2} y={balcony.y + balcony.length / 2 + 0.25} textAnchor="middle" fontSize="0.68" fontWeight="700" pointerEvents="none">{balcony.kind.toUpperCase()}</text>
@@ -791,7 +792,7 @@ export default function FloorPlan({
           <circle cx={activeMeasurement.start.x} cy={activeMeasurement.start.y} r="0.22" />
           <circle cx={activeMeasurement.end.x} cy={activeMeasurement.end.y} r="0.22" />
           <text x={(activeMeasurement.start.x + activeMeasurement.end.x) / 2} y={(activeMeasurement.start.y + activeMeasurement.end.y) / 2 - 0.8} textAnchor="middle" className="measurement-text">
-            {round(Math.hypot(activeMeasurement.end.x - activeMeasurement.start.x, activeMeasurement.end.y - activeMeasurement.start.y), 2)} ft
+            {formatLength(Math.hypot(activeMeasurement.end.x - activeMeasurement.start.x, activeMeasurement.end.y - activeMeasurement.start.y), project.unit, { word: true })}
           </text>
         </g>
       )}
