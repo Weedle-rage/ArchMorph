@@ -1,3 +1,5 @@
+import type { FurnitureKind } from "./furniture.ts";
+
 export type Actor = "human" | "agent" | "system";
 export type ViewMode = "2d" | "3d";
 export type NavigationMode = "orbit" | "walk";
@@ -144,6 +146,25 @@ export type Balcony = {
   };
 };
 
+export type FurnitureRotation = 0 | 90 | 180 | 270;
+
+export type Furniture = {
+  id: string;
+  floorId: string;
+  roomId: string;
+  kind: FurnitureKind;
+  name: string;
+  /** Footprint top-left in feet, relative to the room's bounding-box origin (`room.x`, `room.y`), after rotation. */
+  x: number;
+  y: number;
+  /** Unrotated size in feet. At rotation 90/270 the plan footprint swaps width and length. */
+  width: number;
+  length: number;
+  height: number;
+  rotation: FurnitureRotation;
+  color?: string;
+};
+
 export type FacadeFeature = {
   id: string;
   kind: FacadeFeatureKind;
@@ -282,6 +303,7 @@ export type Project = {
   openings: Opening[];
   stairs: Stair[];
   balconies: Balcony[];
+  furniture: Furniture[];
   facadeFeatures: FacadeFeature[];
   roof: RoofSettings;
   siteBoundary: SiteBoundarySettings;
@@ -625,7 +647,7 @@ export function createInitialProject(): Project {
   };
 
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     id: "project-archmorph-home",
     name: "Untitled Residence",
     unit: "ft",
@@ -641,6 +663,7 @@ export function createInitialProject(): Project {
     openings: [],
     stairs: [],
     balconies: [],
+    furniture: [],
     facadeFeatures: [],
     roof: {
       type: "flat",
@@ -1761,7 +1784,7 @@ function roomFromVertices(room: Room, vertices: PlanPoint[], shape: RoomShape = 
 
 export function migrateProject(input: Project): Project {
   const project = cloneProject(input);
-  project.schemaVersion = 7;
+  project.schemaVersion = 8;
   project.exteriorFinish = exteriorFinishPresets[project.exteriorFinish] ? project.exteriorFinish : "stucco";
   project.roof = {
     type: "flat",
@@ -1795,6 +1818,11 @@ export function migrateProject(input: Project): Project {
       style: balcony.railing?.style ?? "horizontal",
       sides: balcony.railing?.sides?.length ? balcony.railing.sides : ["north", "east", "south", "west"],
     },
+  }));
+  project.furniture = (project.furniture ?? []).map((item) => ({
+    ...item,
+    name: item.name?.trim() || item.kind,
+    rotation: ([0, 90, 180, 270] as const).includes(item.rotation) ? item.rotation : 0,
   }));
   project.facadeFeatures = (project.facadeFeatures ?? []).map((feature) => ({
     ...feature,
@@ -2113,6 +2141,7 @@ export function applyOperation(
     openings: current.openings.map((item) => ({ ...item })),
     stairs: current.stairs.map((item) => ({ ...item })),
     balconies: current.balconies.map((item) => ({ ...item, railing: { ...item.railing, sides: [...item.railing.sides] } })),
+    furniture: (current.furniture ?? []).map((item) => ({ ...item })),
     facadeFeatures: current.facadeFeatures.map((item) => ({ ...item })),
     roof: { ...current.roof },
     siteBoundary: { ...current.siteBoundary, gate: { ...current.siteBoundary.gate } },

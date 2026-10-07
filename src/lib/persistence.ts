@@ -6,7 +6,7 @@ import {
   type Project,
 } from "./architecture.ts";
 
-export const PROJECT_SCHEMA_VERSION = 7;
+export const PROJECT_SCHEMA_VERSION = 8;
 const LIBRARY_SCHEMA_VERSION = 1;
 const STORAGE_KEY = "archmorph.project-library.v1";
 

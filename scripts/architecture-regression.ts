@@ -150,7 +150,7 @@ assert.equal(metrics.openSiteArea, metrics.plotArea - projectMetrics(project).gr
 persistence.saveProjectLocally(project);
 const restored = persistence.loadLatestProject()!;
 assert.equal(restored.id, project.id);
-assert.equal(restored.schemaVersion, 7);
+assert.equal(restored.schemaVersion, 8);
 assert.equal(restored.walls.length, project.walls.length);
 assert.equal(restored.openings.length, project.openings.length);
 assert.equal(restored.view.focusElementId, undefined, "temporary focus state should not be persisted");
@@ -404,7 +404,7 @@ assert.equal(exteriorProject.facadeFeatures.length, 1, "hosted façade features 
 assert.ok(exteriorProject.walls.some((wall) => wall.exterior && wall.finish === "brick"), "per-wall finish overrides should survive room-controlled topology movement");
 assertOperationRejectedWithoutMutation(exteriorProject, { type: "update_balcony", balconyId: exteriorProject.balconies[0].id, width: 80 }, /inside the plot/);
 const exteriorRoundTrip = persistence.importProjectDocument(persistence.exportProjectDocument(exteriorProject));
-assert.equal(exteriorRoundTrip.schemaVersion, 7);
+assert.equal(exteriorRoundTrip.schemaVersion, 8);
 assert.equal(exteriorRoundTrip.balconies.length, 1);
 assert.equal(exteriorRoundTrip.facadeFeatures.length, 1);
 assert.equal(exteriorRoundTrip.siteBoundary.enabled, true);
@@ -428,7 +428,7 @@ delete (legacyDocument.stairs as Array<Record<string, unknown>>)[0].landingDepth
 delete (legacyDocument.stairs as Array<Record<string, unknown>>)[0].wellWidth;
 delete (legacyDocument.stairs as Array<Record<string, unknown>>)[0].turnSide;
 const migratedLegacy = migrateProject(legacyDocument as unknown as Project);
-assert.equal(migratedLegacy.schemaVersion, 7, "legacy projects should migrate to schema v7");
+assert.equal(migratedLegacy.schemaVersion, 8, "legacy projects should migrate to schema v8");
 assert.equal(migratedLegacy.exteriorFinish, "stucco", "legacy projects should receive a stable default facade finish");
 assert.equal(migratedLegacy.rooms[0].shape, "rectangle", "legacy rooms should migrate as rectangles");
 assert.equal(migratedLegacy.stairs[0].rotation, 0, "legacy stairs should migrate to zero rotation");
@@ -797,6 +797,34 @@ assertOperationRejectedWithoutMutation(
     undefined,
     "an item larger than the room has no position",
   );
+}
+
+{
+  const fresh = createInitialProject();
+  assert.equal(fresh.schemaVersion, 8);
+  assert.deepEqual(fresh.furniture, [], "a new project starts without furniture");
+
+  // Review focus 5: a v7 project has no furniture array at all.
+  const v7 = JSON.parse(JSON.stringify(createInitialProject())) as Record<string, unknown>;
+  v7.schemaVersion = 7;
+  delete v7.furniture;
+  const migrated = migrateProject(v7 as unknown as Project);
+  assert.equal(migrated.schemaVersion, 8);
+  assert.deepEqual(migrated.furniture, []);
+
+  // Existing furniture survives a migration round trip, with a bad rotation repaired.
+  const withItem = JSON.parse(JSON.stringify(createInitialProject())) as Project;
+  withItem.furniture = [{ id: "furniture-a", floorId: "floor-ground", roomId: "room-a", kind: "sofa", name: "Sofa", x: 1, y: 2, width: 7, length: 3, height: 2.8, rotation: 45 as never }];
+  const kept = migrateProject(withItem);
+  assert.equal(kept.furniture.length, 1);
+  assert.equal(kept.furniture[0].rotation, 0, "an invalid rotation is repaired to 0");
+  assert.equal(kept.furniture[0].id, "furniture-a");
+
+  // The reducer must also cope with a project object that has no furniture field.
+  const noField = JSON.parse(JSON.stringify(createInitialProject())) as Record<string, unknown>;
+  delete noField.furniture;
+  const renamed = applyOperation(noField as unknown as Project, { type: "rename_project", name: "Legacy" }, "agent").project;
+  assert.deepEqual(renamed.furniture, []);
 }
 
 console.log(JSON.stringify({
