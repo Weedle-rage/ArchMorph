@@ -12,7 +12,7 @@ ArchMorph is a browser-based architectural concept-design environment where a pe
 
 ## Why WebMCP
 
-Coordinate clicking is fragile in an architectural editor. A small visual error can select the wrong wall, place an opening outside its host, or edit the wrong floor. ArchMorph instead exposes 61 architectural operations through `document.modelContext.registerTool()`.
+Coordinate clicking is fragile in an architectural editor. A small visual error can select the wrong wall, place an opening outside its host, or edit the wrong floor. ArchMorph instead exposes 62 architectural operations through `document.modelContext.registerTool()`.
 
 The landing page is WebMCP-enabled too: an agent can inspect the product surface, control the live model's complete/section presentation and drawing layers, then open the studio through four focused route-scoped tools. Clicking the layer toggles or the section button runs the same four definitions, so the title block above the model attributes each change to the person or the agent. Entering the studio releases that landing catalog and replaces it with the full architectural tool surface.
 
@@ -43,6 +43,7 @@ A representative collaboration loop is:
 - Hosted doors and windows with handing, operation, and glazing-performance properties.
 - Connected straight, 90° quarter-turn L-shaped, and 180° half-turn U-shaped stairs with explicit flights, landings, entry/exit approaches, true stairwell openings, four plan rotations, and Walk Mode transitions.
 - Basic schematic furniture (beds, sofas, tables, wardrobes, counters, sanitary fixtures) placed inside rooms, kept inside the room and out of other furniture at the operation, carried along when a room moves, and drawn in the plan and the 3D and Walk views.
+- Per-project units: switch a project between decimal feet and metres. Lengths, areas, typed input (including feet-inches and mm/cm/m suffixes), messages and agent tools follow the project's unit; stored geometry stays in feet.
 - Exact dimensions, direct manipulation, snapping, selection, and measurement.
 - Circulation graphs with entrance-to-room route evidence.
 - Validation for overlap, plot/setback violations, opening hosts, circulation, and stairs.
@@ -61,7 +62,7 @@ ArchMorph includes concept-level furniture for scale and fit checks, and intenti
 | Category | Count | Examples |
 | --- | ---: | --- |
 | Inspect | 9 | `inspect_project`, `inspect_floor`, `inspect_exterior`, `inspect_circulation`, `list_furniture_kinds` |
-| Edit | 40 | `configure_plot`, `set_floor_height`, `update_room`, `add_balcony`, `add_furniture`, `set_roof`, `delete_stairs` |
+| Edit | 41 | `configure_plot`, `set_floor_height`, `update_room`, `add_balcony`, `add_furniture`, `set_units`, `set_roof`, `delete_stairs` |
 | Calculate and validate | 5 | `calculate_room_area`, `measure_distance`, `validate_layout` |
 | Present | 7 | `switch_view`, `set_active_floor`, `set_camera`, `focus_element`, `take_snapshot` |
 
@@ -100,9 +101,9 @@ npm run lint
 npm run build
 ```
 
-`test:architecture` covers canonical geometry, topology, openings, circulation, straight/L/U stairs, polygonal rooms, exterior systems, per-project sites, persistence, migrations, and spatial collision data. `test:webmcp` checks the 61-tool catalog, schema boundaries, annotations, unique names, human/agent operation parity, inspection payload size, and representative inspection/mutation failures.
+`test:architecture` covers canonical geometry, topology, openings, circulation, straight/L/U stairs, polygonal rooms, exterior systems, per-project sites, persistence, migrations, and spatial collision data. `test:webmcp` checks the 62-tool catalog, schema boundaries, annotations, unique names, human/agent operation parity, inspection payload size, and representative inspection/mutation failures.
 
-The N01–N10 production baseline was verified with ChatGPT desktop 26.825.41651 (build 7345) when the deployed catalog contained 40 tools: N01–N07 and N09–N10 passed, and N08 was N/A because that client exposes no cancellation mechanism. The 51-tool catalog additionally passed native local discovery and representative exterior-system execution on August 30; the current catalog contains 61 tools. See [`docs/WEBMCP_TESTING.md`](docs/WEBMCP_TESTING.md) for the exact records.
+The N01–N10 production baseline was verified with ChatGPT desktop 26.825.41651 (build 7345) when the deployed catalog contained 40 tools: N01–N07 and N09–N10 passed, and N08 was N/A because that client exposes no cancellation mechanism. The 51-tool catalog additionally passed native local discovery and representative exterior-system execution on August 30; the current catalog contains 62 tools. See [`docs/WEBMCP_TESTING.md`](docs/WEBMCP_TESTING.md) for the exact records.
 
 The under-three-minute recording plan and narration are ready in [`docs/DEMO_VIDEO_SCRIPT.md`](docs/DEMO_VIDEO_SCRIPT.md).
 
