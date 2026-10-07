@@ -28,6 +28,8 @@ import {
   validateLayout,
 } from "./architecture.ts";
 import { furnitureCatalog, furnitureKinds, type FurnitureKind } from "./furniture.ts";
+import type { UnitSystem } from "./units.ts";
+import { withUnits } from "./webmcp-units.ts";
 
 export type ToolRuntime = {
   getProject: () => Project;
@@ -122,7 +124,7 @@ function pointReference(input: unknown, label: string): PointRef {
 
 const readOnly = { readOnlyHint: true };
 
-export function createArchMorphTools(runtime: ToolRuntime): ArchMorphTool[] {
+function createRawTools(runtime: ToolRuntime): ArchMorphTool[] {
   return [
     {
       name: "inspect_project",
@@ -942,6 +944,17 @@ export function createArchMorphTools(runtime: ToolRuntime): ArchMorphTool[] {
       execute: (input) => runtime.perform({ type: "delete_balcony", balconyId: requiredString(input, "balconyId") }).result,
     },
     {
+      name: "set_units",
+      category: "edit",
+      description: "Switch the project's unit between ft (areas in sq ft) and m (areas in m²). This changes only how lengths and areas are shown and sent to tools; geometry is unchanged. Tool arguments and results always use the project's current unit, reported by inspect_project.",
+      inputSchema: {
+        type: "object",
+        properties: { unit: { type: "string", enum: ["ft", "m"], description: "ft or m." } },
+        required: ["unit"], additionalProperties: false,
+      },
+      execute: (input) => runtime.perform({ type: "set_units", unit: requiredString(input, "unit") as UnitSystem }).result,
+    },
+    {
       name: "list_furniture_kinds",
       category: "inspect",
       description: "List the furniture catalog: every kind with its default width, length and height in feet. Call this before add_furniture.",
@@ -1269,4 +1282,8 @@ export function createArchMorphTools(runtime: ToolRuntime): ArchMorphTool[] {
       ),
     },
   ];
+}
+
+export function createArchMorphTools(runtime: ToolRuntime): ArchMorphTool[] {
+  return withUnits(createRawTools(runtime), () => runtime.getProject().unit);
 }
